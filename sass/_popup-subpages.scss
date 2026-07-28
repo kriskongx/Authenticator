@@ -48,7 +48,7 @@
 
 .backup-option-list {
   overflow: hidden;
-  border-radius: 12px;
+  border-radius: 10px;
   @include themify($themes) {
     border: 1px solid themed("grey-2");
     background: themed("white-1");
@@ -426,11 +426,195 @@ a.add-method-row {
 
 .webdav-action-card .subpage-actions {
   margin-top: 0;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.webdav-action-card .subpage-actions .subpage-button {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 6px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.2;
 }
 
 .webdav-action-card .subpage-actions .subpage-button.primary {
   margin-left: 0;
+}
+
+.webdav-file-manager {
+  overflow: hidden;
+}
+
+.webdav-file-toolbar {
+  min-height: 44px;
+  padding: 8px 9px 7px;
+  display: grid;
+  grid-template-columns: 42px minmax(76px, 1.28fr) minmax(60px, 1fr) minmax(
+      62px,
+      1fr
+    );
+  gap: 6px;
+}
+
+.webdav-file-toolbar .subpage-button {
+  width: 100%;
+  min-height: 31px;
+  padding: 0 4px;
+  font-size: 10px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.15;
+}
+
+.webdav-file-status {
+  min-height: 25px;
+  padding: 0 10px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  line-height: 1.3;
+  text-align: center;
+  @include themify($themes) {
+    color: themed("grey-1");
+    border-bottom: 1px solid themed("grey-2");
+  }
+}
+
+.webdav-file-list {
+  min-width: 0;
+}
+
+.webdav-file-row {
+  min-height: 66px;
+  padding: 8px 10px;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 9px;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 0.16s ease, box-shadow 0.16s ease;
+
+  &:hover {
+    @include themify($themes) {
+      background: themed("blue-menu");
+    }
+  }
+
+  &:focus-visible,
+  &.is-selected {
+    @include themify($themes) {
+      background: themed("blue-menu");
+    }
+    box-shadow: inset 3px 0 0 rgba(10, 132, 255, 0.75);
+  }
+}
+
+.webdav-file-select {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  align-self: center;
+}
+
+.webdav-file-select input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.webdav-file-checkbox {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+  @include themify($themes) {
+    border-color: themed("grey-2");
+    background: themed("white-1");
+  }
+
+  svg {
+    width: 13px;
+    height: 13px;
+    fill: #ffffff;
+  }
+}
+
+.webdav-file-checkbox.checked,
+.webdav-file-select input:checked + .webdav-file-checkbox {
+  @include themify($themes) {
+    background: themed("blue-1");
+    border-color: themed("blue-1");
+  }
+}
+
+.webdav-file-select input:focus-visible + .webdav-file-checkbox {
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.2);
+}
+
+.webdav-file-copy {
+  min-width: 0;
+}
+
+.webdav-file-title {
+  min-width: 0;
+  overflow: hidden;
+  padding-right: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  @include themify($themes) {
+    color: themed("black-1");
+  }
+}
+
+.webdav-file-meta {
+  margin-top: 3px;
+  overflow: hidden;
+  font-size: 10.5px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  @include themify($themes) {
+    color: themed("grey-1");
+  }
+}
+
+.webdav-file-actions {
+  min-height: 50px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.webdav-file-actions .subpage-button {
+  min-width: 42px;
+  min-height: 24px;
+  padding: 0 7px;
+  font-size: 10.5px;
+  border-radius: 8px;
+}
+
+.webdav-file-empty {
+  margin: 0;
+  padding: 14px 10px 16px;
 }
 
 .webdav-toggle-field {
@@ -554,6 +738,10 @@ a.add-method-row {
     margin-top: 15px;
   }
 
+  &.webdav-page .webdav-file-select {
+    margin: 0;
+  }
+
   &.add-account-page label.subpage-field + label.subpage-field {
     margin-top: 13px;
   }
@@ -574,5 +762,15 @@ a.add-method-row {
 
   .subpage-row-icon.warning {
     color: #b76500;
+  }
+}
+
+@media (max-width: 360px) {
+  .webdav-file-row {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+  }
+
+  .webdav-file-actions {
+    grid-column: auto;
   }
 }

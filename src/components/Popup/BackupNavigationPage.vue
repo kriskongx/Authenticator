@@ -21,7 +21,15 @@
         v-else-if="currentPage === 'ExportBackupPage'"
         :embedded="true"
       />
-      <WebDAVPage v-else-if="currentPage === 'WebDAVPage'" :embedded="true" />
+      <WebDAVPage
+        v-else-if="currentPage === 'WebDAVPage'"
+        :embedded="true"
+        @navigate="navigate"
+      />
+      <WebDAVManagePage
+        v-else-if="currentPage === 'WebDAVManagePage'"
+        :embedded="true"
+      />
     </div>
   </div>
 </template>
@@ -31,6 +39,7 @@ import IconArrowLeft from "../../../svg/arrow-left.svg";
 import BackupPage from "./BackupPage.vue";
 import ExportBackupPage from "./ExportBackupPage.vue";
 import WebDAVPage from "./WebDAVPage.vue";
+import WebDAVManagePage from "./WebDAVManagePage.vue";
 
 export default Vue.extend({
   props: {
@@ -52,6 +61,9 @@ export default Vue.extend({
       if (this.currentPage === "WebDAVPage") {
         return this.i18n.ui_webdav_title;
       }
+      if (this.currentPage === "WebDAVManagePage") {
+        return this.i18n.webdav_manage_files || "Manage backup files";
+      }
       return this.i18n.ui_backup_title;
     },
   },
@@ -64,11 +76,19 @@ export default Vue.extend({
   },
   methods: {
     navigate(page: string) {
-      if (page === "ExportBackupPage" || page === "WebDAVPage") {
+      if (
+        page === "ExportBackupPage" ||
+        page === "WebDAVPage" ||
+        page === "WebDAVManagePage"
+      ) {
         this.currentPage = page;
       }
     },
     goBack() {
+      if (this.currentPage === "WebDAVManagePage") {
+        this.currentPage = "WebDAVPage";
+        return;
+      }
       if (this.currentPage !== "BackupPage") {
         this.currentPage = "BackupPage";
         return;
@@ -81,6 +101,7 @@ export default Vue.extend({
     BackupPage,
     ExportBackupPage,
     WebDAVPage,
+    WebDAVManagePage,
   },
 });
 </script>

@@ -426,11 +426,11 @@
     "description": "Restore operation cancelled"
   },
   "webdav_loading_files": {
-    "message": "Loading WebDAV backups…",
+    "message": "Loading WebDAV backups",
     "description": "Status text while loading file list"
   },
   "webdav_no_files": {
-    "message": "No backup files found.",
+    "message": "No backup files found",
     "description": "Shown when WebDAV directory has no files"
   },
   "webdav_last_backup": {
@@ -442,12 +442,68 @@
     "description": "Shown when no WebDAV backup has been recorded"
   },
   "webdav_fetch_failed": {
-    "message": "Failed to load WebDAV backups.",
+    "message": "Failed to load WebDAV backups",
     "description": "Shown when listing backups fails"
   },
   "webdav_settings_missing": {
-    "message": "Please fill in your WebDAV settings first.",
+    "message": "Please fill in your WebDAV settings first",
     "description": "Shown when required settings are missing"
+  },
+  "webdav_manage_files": {
+    "message": "Manage backup files",
+    "description": "Title for WebDAV backup file manager"
+  },
+  "webdav_manage_files_desc": {
+    "message": "Download or delete backup files stored on your WebDAV server",
+    "description": "Description for WebDAV backup file manager"
+  },
+  "webdav_selected_count": {
+    "message": "{count} selected",
+    "description": "Selected WebDAV backup file count"
+  },
+  "webdav_download_selected": {
+    "message": "Download selected",
+    "description": "Download selected WebDAV backup files"
+  },
+  "webdav_download_file": {
+    "message": "Download",
+    "description": "Download a single WebDAV backup file"
+  },
+  "webdav_delete_selected": {
+    "message": "Delete selected",
+    "description": "Delete selected WebDAV backup files"
+  },
+  "webdav_downloading_files": {
+    "message": "Downloading",
+    "description": "Shown while downloading WebDAV backup files"
+  },
+  "webdav_deleting_files": {
+    "message": "Deleting",
+    "description": "Shown while deleting WebDAV backup files"
+  },
+  "webdav_download_success": {
+    "message": "{count} backup file(s) downloaded",
+    "description": "Shown after downloading WebDAV backup files"
+  },
+  "webdav_download_failure": {
+    "message": "Failed to download backup file",
+    "description": "Shown when downloading a WebDAV backup file fails"
+  },
+  "webdav_delete_confirm": {
+    "message": "Delete {count} backup file(s)?",
+    "description": "Confirmation before deleting WebDAV backup files"
+  },
+  "webdav_delete_success": {
+    "message": "{count} backup file(s) deleted",
+    "description": "Shown after deleting WebDAV backup files"
+  },
+  "webdav_delete_failure": {
+    "message": "Failed to delete backup file",
+    "description": "Shown when deleting WebDAV backup files fails"
+  },
+  "webdav_file_meta_empty": {
+    "message": "No details",
+    "description": "Fallback metadata for WebDAV backup file rows"
   },
   "backup_clear_button": {
     "message": "Clear All Data",

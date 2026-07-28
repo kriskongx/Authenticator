@@ -337,13 +337,9 @@ export async function uploadWebDAVBackup(
     throw new Error("backupContentTooLarge");
   }
   const now = new Date();
-  const timestamp = now.toISOString().replace(/[:.]/g, "-");
-  // Add milliseconds to make filename more unique and avoid 423 conflicts
-  const ms = now.getMilliseconds().toString().padStart(3, "0");
-  const backupType = encryptedBackup ? "encrypted" : "plain";
-  const fileName = `authenticator-${backupType}-${timestamp}-${ms}.json`;
+  const fileName = buildWebDAVBackupFileName(now, encryptedBackup);
   const baseUrl = getBaseUrl(config.url);
-  const uploadUrl = `${baseUrl}/${fileName}`;
+  const uploadUrl = buildWebDAVFileUrl(baseUrl, fileName);
 
   // Retry logic for handling 423 (Locked) status
   const maxRetries = 3;
@@ -521,7 +517,7 @@ export async function downloadWebDAVBackup(
   }
 
   const baseUrl = getBaseUrl(config.url);
-  const fileUrl = `${baseUrl}/${fileName}`;
+  const fileUrl = buildWebDAVFileUrl(baseUrl, fileName);
   const response = await sendWebDAVRequest(
     "GET",
     fileUrl,
@@ -552,7 +548,7 @@ export async function deleteWebDAVBackup(fileName: string): Promise<boolean> {
   }
 
   const baseUrl = getBaseUrl(config.url);
-  const fileUrl = `${baseUrl}/${fileName}`;
+  const fileUrl = buildWebDAVFileUrl(baseUrl, fileName);
   const response = await sendWebDAVRequest(
     "DELETE",
     fileUrl,
@@ -619,4 +615,51 @@ function compareWebDAVFilesNewestFirst(a: WebDAVFile, b: WebDAVFile) {
     }
   }
   return b.name.localeCompare(a.name);
+}
+
+export function buildWebDAVBackupFileName(
+  now: Date,
+  encryptedBackup: boolean,
+  platform = getWebDAVClientPlatform()
+) {
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  // Add milliseconds to make filename more unique and avoid 423 conflicts.
+  const ms = now.getMilliseconds().toString().padStart(3, "0");
+  const backupType = encryptedBackup ? "encrypted" : "plain";
+  return `authenticator-${platform}-${backupType}-${timestamp}-${ms}.json`;
+}
+
+export function getWebDAVClientPlatform(
+  userAgent = typeof navigator === "undefined" ? "" : navigator.userAgent || "",
+  platform = typeof navigator === "undefined" ? "" : navigator.platform || ""
+) {
+  const normalizedUserAgent = userAgent.toLowerCase();
+  const normalizedPlatform = platform.toLowerCase();
+  if (
+    normalizedUserAgent.includes("mac os") ||
+    normalizedUserAgent.includes("macintosh") ||
+    normalizedPlatform.includes("mac")
+  ) {
+    return "mac";
+  }
+  if (
+    normalizedUserAgent.includes("windows") ||
+    normalizedPlatform.includes("win")
+  ) {
+    return "windows";
+  }
+  if (
+    normalizedUserAgent.includes("linux") ||
+    normalizedPlatform.includes("linux")
+  ) {
+    return "linux";
+  }
+  return "unknown";
+}
+
+function buildWebDAVFileUrl(baseUrl: string, fileName: string) {
+  return `${baseUrl}/${fileName
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/")}`;
 }

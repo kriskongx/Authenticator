@@ -170,6 +170,13 @@
                 : i18n.webdav_refresh_list || "Refresh"
             }}
           </button>
+          <button
+            type="button"
+            class="subpage-button"
+            @click="openWebDAVFileManager"
+          >
+            {{ i18n.webdav_manage_files || "Manage backup files" }}
+          </button>
         </div>
         <p class="subpage-card-message" v-if="webdav.message">
           {{ webdav.message }}
@@ -563,7 +570,10 @@ export default Vue.extend({
           this.webdav.selectedFile = "";
         } else {
           this.webdav.message = "";
-          if (!this.webdav.selectedFile) {
+          if (
+            !this.webdav.selectedFile ||
+            !files.some((file) => file.name === this.webdav.selectedFile)
+          ) {
             this.webdav.selectedFile = files[0].name;
           }
         }
@@ -833,6 +843,12 @@ export default Vue.extend({
         ? ` - ${new Date(file.lastModified).toLocaleString()}`
         : "";
       return `${file.displayName}${size}${date}`;
+    },
+    async openWebDAVFileManager() {
+      if (!(await this.ensureWebDAVReady())) {
+        return;
+      }
+      this.$emit("navigate", "WebDAVManagePage");
     },
     formatBytes(bytes: number) {
       if (!bytes) {

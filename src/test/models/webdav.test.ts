@@ -1,6 +1,8 @@
 import "mocha";
 import { expect } from "chai";
 import {
+  buildWebDAVBackupFileName,
+  getWebDAVClientPlatform,
   getWebDAVBackupsToPrune,
   isWebDAVBackupDue,
   readWebDAVResponseText,
@@ -37,6 +39,30 @@ describe("WebDAV transfer limits", () => {
     expect(getWebDAVBackupsToPrune(files, 2).map((file) => file.name)).to.eql([
       "old.json",
     ]);
+  });
+
+  it("adds the client platform and backup type to generated file names", () => {
+    const fileName = buildWebDAVBackupFileName(
+      new Date("2026-07-28T10:11:12.123Z"),
+      true,
+      "mac"
+    );
+
+    expect(fileName).to.equal(
+      "authenticator-mac-encrypted-2026-07-28T10-11-12-123Z-123.json"
+    );
+  });
+
+  it("detects common desktop platforms for WebDAV backup names", () => {
+    expect(getWebDAVClientPlatform("Mozilla/5.0 (Macintosh)", "")).to.equal(
+      "mac"
+    );
+    expect(
+      getWebDAVClientPlatform("Mozilla/5.0 (Windows NT 10.0)", "")
+    ).to.equal("windows");
+    expect(
+      getWebDAVClientPlatform("Mozilla/5.0 (X11; Linux x86_64)", "")
+    ).to.equal("linux");
   });
 
   it("rejects a response whose declared size exceeds the limit", async () => {

@@ -342,7 +342,7 @@
     "description": "Test WebDAV connection button"
   },
   "webdav_backup_button": {
-    "message": "备份到 WebDAV",
+    "message": "备份文件",
     "description": "Trigger WebDAV backup"
   },
   "webdav_restore_button": {
@@ -426,11 +426,11 @@
     "description": "Restore operation cancelled"
   },
   "webdav_loading_files": {
-    "message": "正在加载 WebDAV 备份…",
+    "message": "正在加载 WebDAV 备份",
     "description": "Status text while loading file list"
   },
   "webdav_no_files": {
-    "message": "未找到备份文件。",
+    "message": "未找到备份文件",
     "description": "Shown when WebDAV directory has no files"
   },
   "webdav_last_backup": {
@@ -442,12 +442,68 @@
     "description": "Shown when no WebDAV backup has been recorded"
   },
   "webdav_fetch_failed": {
-    "message": "加载 WebDAV 备份失败。",
+    "message": "加载 WebDAV 备份失败",
     "description": "Shown when listing backups fails"
   },
   "webdav_settings_missing": {
-    "message": "请先填写 WebDAV 设置。",
+    "message": "请先填写 WebDAV 设置",
     "description": "Shown when required settings are missing"
+  },
+  "webdav_manage_files": {
+    "message": "管理备份文件",
+    "description": "Title for WebDAV backup file manager"
+  },
+  "webdav_manage_files_desc": {
+    "message": "下载或删除保存在 WebDAV 服务器上的备份文件",
+    "description": "Description for WebDAV backup file manager"
+  },
+  "webdav_selected_count": {
+    "message": "已选择 {count} 个",
+    "description": "Selected WebDAV backup file count"
+  },
+  "webdav_download_selected": {
+    "message": "下载所选",
+    "description": "Download selected WebDAV backup files"
+  },
+  "webdav_download_file": {
+    "message": "下载",
+    "description": "Download a single WebDAV backup file"
+  },
+  "webdav_delete_selected": {
+    "message": "删除所选",
+    "description": "Delete selected WebDAV backup files"
+  },
+  "webdav_downloading_files": {
+    "message": "正在下载",
+    "description": "Shown while downloading WebDAV backup files"
+  },
+  "webdav_deleting_files": {
+    "message": "正在删除",
+    "description": "Shown while deleting WebDAV backup files"
+  },
+  "webdav_download_success": {
+    "message": "已下载 {count} 个备份文件",
+    "description": "Shown after downloading WebDAV backup files"
+  },
+  "webdav_download_failure": {
+    "message": "下载备份文件失败",
+    "description": "Shown when downloading a WebDAV backup file fails"
+  },
+  "webdav_delete_confirm": {
+    "message": "删除 {count} 个备份文件？",
+    "description": "Confirmation before deleting WebDAV backup files"
+  },
+  "webdav_delete_success": {
+    "message": "已删除 {count} 个备份文件",
+    "description": "Shown after deleting WebDAV backup files"
+  },
+  "webdav_delete_failure": {
+    "message": "删除备份文件失败",
+    "description": "Shown when deleting WebDAV backup files fails"
+  },
+  "webdav_file_meta_empty": {
+    "message": "无详细信息",
+    "description": "Fallback metadata for WebDAV backup file rows"
   },
   "backup_clear_button": {
     "message": "一键清空数据",
