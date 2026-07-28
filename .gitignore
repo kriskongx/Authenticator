@@ -4,6 +4,7 @@ build
 /chrome
 /firefox
 /edge
+/release
 dist
 .vscode
 .atom-build.yml

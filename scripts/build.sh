@@ -55,13 +55,13 @@ fi
 ./node_modules/sass/sass.js sass:css
 cp ./sass/DroidSansMono.woff2 ./sass/mocha.css ./css/
 
-if [[ $PLATFORM = "prod" ]]; then
-    echo "Generating licenses file..."
-    ./node_modules/.bin/npm-license-generator \
-        --out-path ./view/licenses.html \
-        --template ./scripts/licenses-template.html \
-        --error-missing=true
-fi
+AUTHENTICATOR_VERSION=$(node -p "require('./package.json').version")
+echo "Generating licenses file..."
+./node_modules/.bin/npm-license-generator \
+    --out-path ./view/licenses.html \
+    --template ./scripts/licenses-template.html \
+    --error-missing=true
+node -e "const fs = require('fs'); const file = './view/licenses.html'; const version = process.argv[1]; fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/__AUTHENTICATOR_VERSION__/g, version));" "$AUTHENTICATOR_VERSION"
 
 postCompile () {
     mkdir $1

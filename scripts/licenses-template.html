@@ -1,85 +1,409 @@
 <!DOCTYPE html>
-
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport"
-    content="width=device-width, initial-scale=1">
-</head>
-
-<body>
-  <h1 id="package-name">
-    <a href="https://github.com/Authenticator-Extension">
-      Authenticator Extension
-    </a>
-  </h1>
-  <div class="licenses">
-    <h2>Acknowledgements</h2>
-    <p>Google and Google Drive are trademarks of Google LLC.</p>
-    <p>
-      <a target="_blank" href="https://github.com/FortAwesome/Font-Awesome">
-        Font Awesome Free
-      </a> - Licensed under CC BY 4.0
-    </p>
-    <p>
-      <a target="_blank" href="http://www.droidfonts.com/">
-        Droid Sans Mono
-      </a> - Copyright Steve Matteson. Licensed under the Apache License.
-    </p>
-    <p>
-      Thanks to
-      <a target="_blank" href="https://github.com/multiwebinc">Mike Robinson</a>
-      &lt;3
-    </p>
-    <p>
-      We would like to extend our heartfelt thanks to Laurent, the Chief Information Security Officer (CISO) of the University of Luxembourg, for the invaluable support and contribution to this project. During the development process, the CISO team provided critical security recommendations that helped us identify and address potential vulnerabilities, significantly enhancing the security and reliability of the project.
-    </p>
-    <p>
-      We especially want to acknowledge the University of Luxembourg's information security team for their selfless contribution, which not only facilitated the progress of this project but also had a positive impact on the broader open-source community. We recognize that the success of open-source software depends heavily on collaboration and support from various stakeholders, and the involvement of the University of Luxembourg has allowed us to offer a more secure and dependable product to a wider audience.
-    </p>
-    <p>
-      We understand that while open-source software is free, maintaining and improving these projects requires significant resources. The University of Luxembourg’s information security team has demonstrated their strong commitment to the open-source community, contributing not just within their university but to users and developers globally. We hope this acknowledgment will help them continue to secure the support and resources necessary to further advance open-source initiatives.
-    </p>
-    <p>
-      Once again, we express our sincere gratitude to the University of Luxembourg's CISO team for their valuable advice and assistance.
-    </p>
-    <p><a target="_blank" href="qrdebug.html">QR Debugging</a></p>
-    {{#renderLicenses}}
-    <h3>
-      {{#pkgs}}
-      {{#homepage}}<a href="{{{homepage}}}">{{/homepage}}{{name}}{{#homepage}}</a>{{/homepage}}{{#comma}}, {{/comma}}
-      {{/pkgs}}
-    </h3>
-    <blockquote>
-      {{text}}
-    </blockquote>
-    {{/renderLicenses}}
-  </div>
-  <style>
-    .licenses blockquote {
-      white-space: pre-wrap;
-      background-color: whitesmoke;
-      padding-left: 1rem;
-      padding-right: 1rem;
-      display: inline-block;
-      width: 50%;
-    }
-
-    @media only screen and (max-width: 768px) {
-      .licenses blockquote {
-        width: 100%;
-        margin: 0px;
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>About Authenticator</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --black-1: #1d1d1f;
+        --grey-1: #6e6e73;
+        --grey-2: #e5e5ea;
+        --grey-3: #f2f2f7;
+        --grey-background: #f5f5f7;
+        --white-1: #ffffff;
+        --blue-1: #0a84ff;
+        --blue-menu: #edf4ff;
       }
-    }
 
-    @media only screen and (min-width: 768px) {
+      * {
+        box-sizing: border-box;
+      }
+
       body {
-        margin-left: 10vw;
+        margin: 0;
+        min-width: 320px;
+        background: var(--grey-background);
+        color: var(--black-1);
+        font-family: "SF Pro Text", "SF Pro Display", "SF Pro", "PingFang SC",
+          "Hiragino Sans GB", "Helvetica Neue", Helvetica, Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
       }
-    }
 
-    .licenses h3,
-    #package-name {
-      font-family: sans-serif;
-    }
-  </style>
-</body>
+      a {
+        color: var(--blue-1);
+        text-decoration: none;
+      }
+
+      a:hover {
+        text-decoration: underline;
+      }
+
+      .page {
+        width: min(920px, calc(100% - 32px));
+        margin: 32px auto 48px;
+      }
+
+      .subpage-head {
+        padding: 0 2px 14px;
+      }
+
+      .subpage-title {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 700;
+        line-height: 1.25;
+      }
+
+      .subpage-subtitle {
+        margin: 6px 0 0;
+        max-width: 620px;
+        color: var(--grey-1);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+
+      .subpage-section + .subpage-section {
+        margin-top: 18px;
+      }
+
+      .subpage-section-head {
+        min-height: 22px;
+        margin: 0 2px 8px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .subpage-section-title {
+        min-width: 0;
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.3;
+      }
+
+      .subpage-section-meta {
+        flex: 0 0 auto;
+        color: var(--grey-1);
+        font-size: 12px;
+        line-height: 1.3;
+      }
+
+      .subpage-card,
+      .subpage-list-card {
+        min-width: 0;
+        overflow: hidden;
+        border: 1px solid var(--grey-2);
+        border-radius: 12px;
+        background: var(--white-1);
+      }
+
+      .subpage-card {
+        padding: 16px;
+      }
+
+      .subpage-row {
+        width: 100%;
+        min-width: 0;
+        min-height: 56px;
+        padding: 10px 12px;
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr);
+        align-items: center;
+        gap: 10px;
+        color: inherit;
+      }
+
+      .subpage-row + .subpage-row {
+        border-top: 1px solid var(--grey-2);
+      }
+
+      .subpage-row-icon {
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--blue-menu);
+        color: var(--blue-1);
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      .subpage-row-copy {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+
+      .subpage-row-title {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--black-1);
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.35;
+        text-overflow: ellipsis;
+      }
+
+      .subpage-row-desc {
+        min-width: 0;
+        margin-top: 3px;
+        overflow: hidden;
+        color: var(--grey-1);
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        font-size: 12px;
+        line-height: 1.45;
+        overflow-wrap: anywhere;
+      }
+
+      .acknowledgements {
+        margin: 0;
+        color: var(--grey-1);
+        font-size: 13px;
+        line-height: 1.55;
+      }
+
+      .acknowledgements p {
+        margin: 0;
+      }
+
+      .acknowledgements p + p {
+        margin-top: 10px;
+      }
+
+      .license-group {
+        padding: 0;
+      }
+
+      .license-group + .license-group {
+        margin-top: 10px;
+      }
+
+      .license-summary {
+        min-height: 56px;
+        padding: 12px 14px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        cursor: pointer;
+        list-style: none;
+      }
+
+      .license-summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .license-title {
+        min-width: 0;
+        overflow-wrap: anywhere;
+        color: var(--black-1);
+        font-size: 13px;
+        font-weight: 600;
+        line-height: 1.4;
+      }
+
+      .license-title a {
+        font-weight: inherit;
+      }
+
+      .license-chevron {
+        width: 22px;
+        height: 22px;
+        border-radius: 7px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--grey-3);
+        color: var(--grey-1);
+        font-size: 16px;
+        line-height: 1;
+        transition: transform 0.14s ease;
+      }
+
+      details[open] .license-chevron {
+        transform: rotate(90deg);
+      }
+
+      .license-text {
+        margin: 0;
+        padding: 14px;
+        border-top: 1px solid var(--grey-2);
+        background: #fbfbfd;
+        color: var(--black-1);
+        overflow-x: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-family: "Droid Sans Mono", ui-monospace, SFMono-Regular, Menlo,
+          Consolas, monospace;
+        font-size: 11.5px;
+        line-height: 1.55;
+      }
+
+      @media (max-width: 640px) {
+        .page {
+          width: calc(100% - 20px);
+          margin: 16px auto 28px;
+        }
+
+        .subpage-title {
+          font-size: 20px;
+        }
+
+        .subpage-card {
+          padding: 14px;
+        }
+
+        .subpage-section-head {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 3px;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <main class="page">
+      <header class="subpage-head">
+        <h1 class="subpage-title">About Authenticator</h1>
+        <p class="subpage-subtitle">
+          Version, acknowledgements, and open-source components used by
+          Authenticator Extension.
+        </p>
+      </header>
+
+      <section class="subpage-section" aria-labelledby="project-title">
+        <div class="subpage-section-head">
+          <div id="project-title" class="subpage-section-title">Project</div>
+        </div>
+        <div class="subpage-list-card">
+          <div class="subpage-row">
+            <span class="subpage-row-icon">V</span>
+            <span class="subpage-row-copy">
+              <span class="subpage-row-title">Version</span>
+              <span class="subpage-row-desc">__AUTHENTICATOR_VERSION__</span>
+            </span>
+          </div>
+          <a
+            class="subpage-row"
+            href="https://github.com/Authenticator-Extension"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span class="subpage-row-icon">A</span>
+            <span class="subpage-row-copy">
+              <span class="subpage-row-title">Authenticator Extension</span>
+              <span class="subpage-row-desc"
+                >Open-source browser authenticator for two-step verification
+                codes.</span
+              >
+            </span>
+          </a>
+          <a
+            class="subpage-row"
+            href="qrdebug.html"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <span class="subpage-row-icon">QR</span>
+            <span class="subpage-row-copy">
+              <span class="subpage-row-title">QR Debugging</span>
+              <span class="subpage-row-desc"
+                >Open the QR debugging utility included with the extension.</span
+              >
+            </span>
+          </a>
+        </div>
+      </section>
+
+      <section class="subpage-section" aria-labelledby="ack-title">
+        <div class="subpage-section-head">
+          <div id="ack-title" class="subpage-section-title">
+            Acknowledgements
+          </div>
+        </div>
+        <div class="subpage-card acknowledgements">
+          <p>Google and Google Drive are trademarks of Google LLC.</p>
+          <p>
+            <a
+              target="_blank"
+              rel="noopener noreferrer"
+              href="https://github.com/FortAwesome/Font-Awesome"
+              >Font Awesome Free</a
+            >
+            - Licensed under CC BY 4.0
+          </p>
+          <p>
+            <a
+              target="_blank"
+              rel="noopener noreferrer"
+              href="http://www.droidfonts.com/"
+              >Droid Sans Mono</a
+            >
+            - Copyright Steve Matteson. Licensed under the Apache License.
+          </p>
+          <p>
+            Thanks to
+            <a
+              target="_blank"
+              rel="noopener noreferrer"
+              href="https://github.com/multiwebinc"
+              >Mike Robinson</a
+            >.
+          </p>
+          <p>
+            We would like to extend our heartfelt thanks to Laurent, the Chief
+            Information Security Officer (CISO) of the University of Luxembourg,
+            for the invaluable support and contribution to this project. During
+            the development process, the CISO team provided critical security
+            recommendations that helped us identify and address potential
+            vulnerabilities, significantly enhancing the security and reliability
+            of the project.
+          </p>
+          <p>
+            We especially want to acknowledge the University of Luxembourg's
+            information security team for their selfless contribution, which not
+            only facilitated the progress of this project but also had a positive
+            impact on the broader open-source community.
+          </p>
+        </div>
+      </section>
+
+      <section class="subpage-section" aria-labelledby="licenses-title">
+        <div class="subpage-section-head">
+          <div id="licenses-title" class="subpage-section-title">
+            Open-source licenses
+          </div>
+          <div class="subpage-section-meta">Generated from package metadata</div>
+        </div>
+        {{#renderLicenses}}
+        <details class="subpage-card license-group">
+          <summary class="license-summary">
+            <span class="license-title">
+              {{#pkgs}}
+              {{#homepage}}<a
+                href="{{homepage}}"
+                target="_blank"
+                rel="noopener noreferrer"
+                >{{/homepage}}{{name}}{{#homepage}}</a
+              >{{/homepage}}{{#comma}}, {{/comma}}
+              {{/pkgs}}
+            </span>
+            <span class="license-chevron" aria-hidden="true">&rsaquo;</span>
+          </summary>
+          <pre class="license-text">{{text}}</pre>
+        </details>
+        {{/renderLicenses}}
+      </section>
+    </main>
+  </body>
+</html>
