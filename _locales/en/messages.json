@@ -1053,6 +1053,86 @@
     "message": "Open Authenticator from the webpage context menu",
     "description": "UI text."
   },
+  "biometric_settings_title": {
+    "message": "Device unlock",
+    "description": "Security settings UI label."
+  },
+  "biometric_settings_desc": {
+    "message": "Use this browser profile’s device authenticator to unlock this local vault. The master password remains the recovery method.",
+    "description": "Preferences UI explanation."
+  },
+  "biometric_enable": {
+    "message": "Set up",
+    "description": "Preferences button."
+  },
+  "biometric_disable": {
+    "message": "Remove",
+    "description": "Preferences button."
+  },
+  "biometric_unlock_button": {
+    "message": "Unlock with device",
+    "description": "Password screen button."
+  },
+  "biometric_unlock_failed": {
+    "message": "Device unlock failed. Enter your master password instead.",
+    "description": "Password screen error."
+  },
+  "biometric_setup_failed": {
+    "message": "Device unlock could not be set up. Your master password still works.",
+    "description": "Preferences error."
+  },
+  "biometric_prf_confirmation": {
+    "message": "Confirm device unlock once more",
+    "description": "Preferences button."
+  },
+  "biometric_setup_title": {
+    "message": "Set up device unlock",
+    "description": "Biometric setup page title."
+  },
+  "biometric_setup_desc": {
+    "message": "Confirm with your device to unlock this local vault. Your master password remains available as a recovery method.",
+    "description": "Biometric setup explanation."
+  },
+  "biometric_continue": {
+    "message": "Continue",
+    "description": "Biometric setup button."
+  },
+  "biometric_setup_wait": {
+    "message": "Waiting for device confirmation…",
+    "description": "Biometric setup status."
+  },
+  "biometric_setup_complete": {
+    "message": "Device unlock is ready.",
+    "description": "Biometric setup status."
+  },
+  "biometric_setup_done": {
+    "message": "Done",
+    "description": "Biometric setup button."
+  },
+  "biometric_unlock_desc": {
+    "message": "Confirm with your device to unlock this local vault.",
+    "description": "Biometric unlock page explanation."
+  },
+  "biometric_unlock_complete": {
+    "message": "Vault unlocked.",
+    "description": "Biometric unlock status."
+  },
+  "biometric_requires_password": {
+    "message": "Set a master password first to enable device unlock.",
+    "description": "Security settings hint."
+  },
+  "biometric_unlock_cancelled": {
+    "message": "Device unlock cancelled. Use your master password.",
+    "description": "Biometric unlock status."
+  },
+  "biometric_unlock_needs_tap": {
+    "message": "Tap the button below to confirm with your device.",
+    "description": "Biometric unlock status."
+  },
+  "security_password_row_desc": {
+    "message": "Change the master password that encrypts local codes.",
+    "description": "Security settings row description."
+  },
   "ui_storage_security": {
     "message": "Storage and security",
     "description": "UI text."
@@ -1067,6 +1147,14 @@
   },
   "ui_autolock_minutes": {
     "message": "Automatic lock time in minutes",
+    "description": "UI text."
+  },
+  "ui_autolock_title": {
+    "message": "Auto-lock",
+    "description": "UI text."
+  },
+  "ui_minutes_unit": {
+    "message": "min",
     "description": "UI text."
   },
   "ui_window": {

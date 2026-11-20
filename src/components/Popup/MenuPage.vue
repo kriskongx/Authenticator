@@ -84,22 +84,6 @@
           <button
             type="button"
             class="subpage-row settings-row"
-            :title="i18n.ui_backup_restore"
-            @click="showBackup"
-          >
-            <span class="subpage-row-icon"><IconExchange /></span>
-            <span class="subpage-row-copy">
-              <span class="subpage-row-title">{{
-                i18n.ui_backup_restore
-              }}</span>
-              <span class="subpage-row-desc">{{ i18n.ui_backup_desc }}</span>
-            </span>
-            <IconArrowLeft class="subpage-row-arrow" />
-          </button>
-
-          <button
-            type="button"
-            class="subpage-row settings-row"
             :title="i18n.ui_security_title"
             @click="showInfo('SetPasswordPage')"
           >
@@ -109,21 +93,6 @@
                 i18n.ui_security_title
               }}</span>
               <span class="subpage-row-desc">{{ i18n.ui_security_desc }}</span>
-            </span>
-            <IconArrowLeft class="subpage-row-arrow" />
-          </button>
-
-          <button
-            v-if="isSupported"
-            type="button"
-            class="subpage-row settings-row"
-            :title="i18n.sync_clock"
-            @click="syncClock"
-          >
-            <span class="subpage-row-icon"><IconSync /></span>
-            <span class="subpage-row-copy">
-              <span class="subpage-row-title">{{ i18n.sync_clock }}</span>
-              <span class="subpage-row-desc">{{ i18n.ui_clock_desc }}</span>
             </span>
             <IconArrowLeft class="subpage-row-arrow" />
           </button>
@@ -145,6 +114,37 @@
             </span>
             <IconArrowLeft class="subpage-row-arrow" />
           </button>
+
+          <button
+            type="button"
+            class="subpage-row settings-row"
+            :title="i18n.ui_backup_restore"
+            @click="showBackup"
+          >
+            <span class="subpage-row-icon"><IconExchange /></span>
+            <span class="subpage-row-copy">
+              <span class="subpage-row-title">{{
+                i18n.ui_backup_restore
+              }}</span>
+              <span class="subpage-row-desc">{{ i18n.ui_backup_desc }}</span>
+            </span>
+            <IconArrowLeft class="subpage-row-arrow" />
+          </button>
+
+          <button
+            v-if="isSupported"
+            type="button"
+            class="subpage-row settings-row"
+            :title="i18n.sync_clock"
+            @click="syncClock"
+          >
+            <span class="subpage-row-icon"><IconSync /></span>
+            <span class="subpage-row-copy">
+              <span class="subpage-row-title">{{ i18n.sync_clock }}</span>
+              <span class="subpage-row-desc">{{ i18n.ui_clock_desc }}</span>
+            </span>
+            <IconArrowLeft class="subpage-row-arrow" />
+          </button>
         </div>
       </section>
 
@@ -153,6 +153,20 @@
           <div class="subpage-section-title">{{ i18n.ui_help_about }}</div>
         </div>
         <div class="subpage-list-card settings-list">
+          <button
+            type="button"
+            class="subpage-row settings-row"
+            :title="i18n.source"
+            @click="openLink('https://otp.ee/sourcecode')"
+          >
+            <span class="subpage-row-icon"><IconCode /></span>
+            <span class="subpage-row-copy">
+              <span class="subpage-row-title">{{ i18n.source }}</span>
+              <span class="subpage-row-desc">{{ i18n.ui_source_desc }}</span>
+            </span>
+            <IconArrowLeft class="subpage-row-arrow" />
+          </button>
+
           <button
             type="button"
             class="subpage-row settings-row"
@@ -178,20 +192,6 @@
             <span class="subpage-row-copy">
               <span class="subpage-row-title">{{ i18n.translate }}</span>
               <span class="subpage-row-desc">{{ i18n.ui_translate_desc }}</span>
-            </span>
-            <IconArrowLeft class="subpage-row-arrow" />
-          </button>
-
-          <button
-            type="button"
-            class="subpage-row settings-row"
-            :title="i18n.source"
-            @click="openLink('https://otp.ee/sourcecode')"
-          >
-            <span class="subpage-row-icon"><IconCode /></span>
-            <span class="subpage-row-copy">
-              <span class="subpage-row-title">{{ i18n.source }}</span>
-              <span class="subpage-row-desc">{{ i18n.ui_source_desc }}</span>
             </span>
             <IconArrowLeft class="subpage-row-arrow" />
           </button>
@@ -284,8 +284,7 @@ export default Vue.extend({
       chrome.tabs.create({ url });
     },
     openLink(url: string) {
-      window.open(url, "_blank");
-      return;
+      chrome.tabs.create({ url });
     },
     showInfo(tab: string) {
       if (this.$store.getters["accounts/currentlyEncrypted"]) {

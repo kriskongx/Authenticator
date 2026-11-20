@@ -345,6 +345,54 @@ button.subpage-row {
   padding: 11px;
 }
 
+.subpage-collapsible {
+  summary {
+    min-height: 54px;
+    padding: 8px 10px;
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr) 12px;
+    align-items: center;
+    gap: 9px;
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.14s ease;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    &:focus {
+      outline: none;
+    }
+
+    &:hover {
+      @include themify($themes) {
+        background: themed("blue-menu");
+      }
+    }
+
+    &:focus-visible {
+      outline: 2px solid rgba(10, 132, 255, 0.7);
+      outline-offset: -2px;
+    }
+  }
+
+  &[open] summary {
+    @include themify($themes) {
+      border-bottom: 1px solid themed("grey-2");
+    }
+
+    .subpage-row-arrow {
+      transform: rotate(-90deg);
+    }
+  }
+}
+
+.subpage-collapsible-body {
+  padding: 10px;
+}
+
 .subpage-field {
   display: block;
   width: 100%;

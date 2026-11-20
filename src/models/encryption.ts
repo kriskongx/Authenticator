@@ -73,6 +73,9 @@ export class Encryption implements EncryptionInterface {
     return this.password ? true : false;
   }
 
+  getEncryptionPassword(): string {
+    return this.password;
+  }
   updateEncryptionPassword(password: string) {
     this.password = password;
   }

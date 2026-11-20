@@ -1053,6 +1053,86 @@
     "message": "通过网页右键菜单打开验证器",
     "description": "UI text."
   },
+  "biometric_settings_title": {
+    "message": "设备解锁",
+    "description": "Security settings UI label."
+  },
+  "biometric_settings_desc": {
+    "message": "使用此浏览器配置文件的设备认证器解锁本地密码库；主密码仍可用于恢复。",
+    "description": "Preferences UI explanation."
+  },
+  "biometric_enable": {
+    "message": "设置",
+    "description": "Preferences button."
+  },
+  "biometric_disable": {
+    "message": "移除",
+    "description": "Preferences button."
+  },
+  "biometric_unlock_button": {
+    "message": "使用设备解锁",
+    "description": "Password screen button."
+  },
+  "biometric_unlock_failed": {
+    "message": "设备解锁失败。请改用主密码。",
+    "description": "Password screen error."
+  },
+  "biometric_setup_failed": {
+    "message": "无法设置设备解锁。主密码仍可使用。",
+    "description": "Preferences error."
+  },
+  "biometric_prf_confirmation": {
+    "message": "请再次确认设备解锁",
+    "description": "Preferences button."
+  },
+  "biometric_setup_title": {
+    "message": "设置设备解锁",
+    "description": "Biometric setup page title."
+  },
+  "biometric_setup_desc": {
+    "message": "通过设备认证器解锁本地密码库。主密码仍可作为恢复方式。",
+    "description": "Biometric setup explanation."
+  },
+  "biometric_continue": {
+    "message": "继续",
+    "description": "Biometric setup button."
+  },
+  "biometric_setup_wait": {
+    "message": "等待设备确认…",
+    "description": "Biometric setup status."
+  },
+  "biometric_setup_complete": {
+    "message": "设备解锁已就绪。",
+    "description": "Biometric setup status."
+  },
+  "biometric_setup_done": {
+    "message": "完成",
+    "description": "Biometric setup button."
+  },
+  "biometric_unlock_desc": {
+    "message": "通过设备认证器解锁本地密码库。",
+    "description": "Biometric unlock page explanation."
+  },
+  "biometric_unlock_complete": {
+    "message": "密码库已解锁。",
+    "description": "Biometric unlock status."
+  },
+  "biometric_requires_password": {
+    "message": "请先设置主密码，再启用设备解锁。",
+    "description": "Security settings hint."
+  },
+  "biometric_unlock_cancelled": {
+    "message": "已取消设备解锁，请使用主密码。",
+    "description": "Biometric unlock status."
+  },
+  "biometric_unlock_needs_tap": {
+    "message": "请点按下方按钮完成设备验证。",
+    "description": "Biometric unlock status."
+  },
+  "security_password_row_desc": {
+    "message": "更换用于加密本地验证码数据的主密码。",
+    "description": "Security settings row description."
+  },
   "ui_storage_security": {
     "message": "存储与安全",
     "description": "UI text."
@@ -1067,6 +1147,14 @@
   },
   "ui_autolock_minutes": {
     "message": "自动锁定分钟数",
+    "description": "UI text."
+  },
+  "ui_autolock_title": {
+    "message": "自动锁定",
+    "description": "UI text."
+  },
+  "ui_minutes_unit": {
+    "message": "分钟",
     "description": "UI text."
   },
   "ui_window": {

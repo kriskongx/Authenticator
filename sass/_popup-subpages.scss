@@ -228,6 +228,10 @@ a.add-method-row {
       display: none;
     }
 
+    &:focus {
+      outline: none;
+    }
+
     &:hover {
       @include themify($themes) {
         background: themed("blue-menu");
@@ -329,7 +333,218 @@ a.add-method-row {
   transform: rotate(180deg);
 }
 
+// Unlock (master password) page
+// #infoContent is the fixed-height scroll container PageHandler renders, so the
+// centering below has to target that element; keep the id in sync with
+// PageHandler.vue if it is ever renamed.
+#infoContent.unlock-page {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.unlock-page {
+  padding: 0 18px;
+
+  .unlock-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .unlock-badge {
+    width: 56px;
+    height: 56px;
+    margin-bottom: 12px;
+    border-radius: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    @include themify($themes) {
+      color: themed("blue-1");
+      background: themed("blue-menu");
+    }
+
+    svg {
+      width: 26px;
+      height: 26px;
+      fill: currentColor;
+    }
+  }
+
+  .unlock-title {
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1.3;
+    letter-spacing: -0.2px;
+    @include themify($themes) {
+      color: themed("black-1");
+    }
+  }
+
+  .unlock-subtitle {
+    margin-top: 4px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    @include themify($themes) {
+      color: themed("grey-1");
+    }
+  }
+
+  .unlock-form {
+    margin-top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .unlock-input {
+    width: 100%;
+    box-sizing: border-box;
+    height: 38px;
+    border-radius: 10px;
+    font-size: 13px;
+    text-align: center;
+  }
+
+  .unlock-submit {
+    width: 100%;
+    min-height: 38px;
+    border-radius: 10px;
+    font-size: 12.5px;
+  }
+
+  .unlock-link {
+    align-self: center;
+    margin-top: 2px;
+    padding: 6px 12px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    font: inherit;
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.14s ease, opacity 0.14s ease;
+    @include themify($themes) {
+      color: themed("blue-1");
+    }
+
+    &:hover:not(:disabled) {
+      @include themify($themes) {
+        background: themed("blue-menu");
+      }
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+  }
+
+  .unlock-message {
+    font-size: 10.5px;
+    line-height: 1.45;
+    text-align: center;
+    overflow-wrap: anywhere;
+    @include themify($themes) {
+      color: themed("red-1");
+    }
+  }
+
+  .unlock-hint {
+    font-size: 10.5px;
+    line-height: 1.45;
+    text-align: center;
+    @include themify($themes) {
+      color: themed("grey-1");
+    }
+  }
+}
+
 // Security
+// The page has to fit inside the 420px tall #infoContent, so its vertical
+// rhythm is tighter than the shared .subpage defaults. Every override below
+// exists for that reason - do not copy them to other pages.
+.security-page {
+  // Vertical rhythm
+  .subpage-head {
+    padding-bottom: 8px;
+  }
+
+  .subpage-section + .subpage-section {
+    margin-top: 12px;
+  }
+
+  .subpage-field + .subpage-field {
+    margin-top: 8px;
+  }
+
+  .subpage-text-input {
+    height: 32px;
+  }
+
+  .subpage-actions {
+    margin-top: 9px;
+  }
+
+  // Messages rendered inside a .subpage-card need their own insets, the card
+  // itself has no padding.
+  .subpage-card-message,
+  .security-card-hint {
+    margin: 0 10px 9px;
+  }
+
+  // .subpage-control sets min-width: 0, which lets the grid squeeze the control
+  // column until the number and the unit are clipped. Allow it to keep its
+  // content width and give the input room for four digits plus the stepper.
+  .security-autolock {
+    min-width: auto;
+
+    .subpage-number-input {
+      width: 64px;
+    }
+  }
+}
+
+.security-notice {
+  padding: 8px 9px;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 8px;
+
+  .subpage-row-icon {
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+
+    svg {
+      width: 13px;
+      height: 13px;
+    }
+  }
+
+  .subpage-notice-desc {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+}
+
+.security-actions .subpage-button.danger,
+.security-page .subpage-row .subpage-button.danger {
+  border-color: transparent;
+  background: transparent;
+
+  &:hover:not(:disabled) {
+    @include themify($themes) {
+      color: themed("red-1");
+      background: themed("red-2");
+    }
+  }
+}
+
 .security-actions .subpage-button.danger {
   margin-right: auto;
 }

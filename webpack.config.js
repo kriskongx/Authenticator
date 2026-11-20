@@ -15,6 +15,7 @@ module.exports = {
     options: "./src/options.ts",
     qrdebug: "./src/qrdebug.ts",
     permissions: "./src/permissions.ts",
+    biometric: "./src/biometric.ts",
   },
   module: {
     noParse: /\.wasm$/,
@@ -23,34 +24,34 @@ module.exports = {
         // argon2-browser overrides
         test: /\.wasm$/,
         loader: "base64-loader",
-        type: "javascript/auto"
+        type: "javascript/auto",
       },
       {
         test: /\.tsx?$/,
         loader: "ts-loader",
         options: {
           appendTsSuffixTo: [/\.vue$/],
-          transpileOnly: true
+          transpileOnly: true,
         },
-        exclude: /node_modules/
+        exclude: /node_modules/,
       },
       {
         test: /\.vue$/,
-        loader: "vue-loader"
+        loader: "vue-loader",
       },
       {
         test: /\.svg$/,
-        loader: 'vue-svg-loader'
+        loader: "vue-svg-loader",
       },
       {
         test: /\.(png|jpe?g|gif)$/,
         use: [
           {
-            loader: 'url-loader',
+            loader: "url-loader",
             options: {},
-          }
-        ]
-      }
+          },
+        ],
+      },
     ],
   },
   plugins: [
@@ -58,10 +59,10 @@ module.exports = {
     new ForkTsCheckerWebpackPlugin({
       typescript: {
         extensions: {
-          vue: true
-        }
-      }
-    })
+          vue: true,
+        },
+      },
+    }),
   ],
   resolve: {
     extensions: [
@@ -72,17 +73,17 @@ module.exports = {
       ".json",
       ".wasm",
       ".ts",
-      ".tsx"
+      ".tsx",
     ],
     modules: ["node_modules"],
     fallback: {
       // Stop argon2-browser from trying to bring in node modules
       fs: false,
-      path: false
-    }
+      path: false,
+    },
   },
   output: {
     path: path.resolve(__dirname, "dist"),
-    publicPath: "/dist/"
-  }
+    publicPath: "/dist/",
+  },
 };

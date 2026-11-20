@@ -8,12 +8,7 @@
     </div>
 
     <section class="subpage-section">
-      <div class="subpage-section-head">
-        <div class="subpage-section-title">
-          {{ i18n.ui_password_protection }}
-        </div>
-      </div>
-      <div class="subpage-notice">
+      <div class="subpage-notice security-notice">
         <span class="subpage-row-icon warning"><IconLock /></span>
         <div>
           <div class="subpage-notice-title">
@@ -29,92 +24,188 @@
       </div>
     </section>
 
-    <section class="subpage-section">
-      <div class="subpage-section-head">
-        <div class="subpage-section-title">
-          {{
-            defaultEncryption
-              ? i18n.ui_change_master_password
-              : i18n.ui_set_master_password
-          }}
+    <section class="subpage-section" v-if="isChromium">
+      <div class="subpage-card">
+        <div class="subpage-row">
+          <span class="subpage-row-icon"><IconLock /></span>
+          <span class="subpage-row-copy">
+            <span class="subpage-row-title">{{
+              i18n.biometric_settings_title
+            }}</span>
+            <span class="subpage-row-desc">{{
+              i18n.biometric_settings_desc
+            }}</span>
+          </span>
+          <span class="subpage-control">
+            <button
+              v-if="!biometricEnabled"
+              type="button"
+              class="subpage-button"
+              :disabled="
+                biometricBusy || !biometricAvailable || !defaultEncryption
+              "
+              @click="enableBiometricUnlock"
+            >
+              {{ i18n.biometric_enable }}
+            </button>
+            <button
+              v-else
+              type="button"
+              class="subpage-button danger"
+              :disabled="biometricBusy"
+              @click="disableBiometricUnlock"
+            >
+              {{ i18n.biometric_disable }}
+            </button>
+          </span>
+        </div>
+        <div class="subpage-card-message" v-if="biometricError">
+          {{ biometricError }}
+        </div>
+        <div
+          class="subpage-field-help security-card-hint"
+          v-if="!defaultEncryption"
+        >
+          {{ i18n.biometric_requires_password }}
         </div>
       </div>
-      <form
-        class="subpage-card subpage-form-card"
-        @submit.prevent="changePassphrase"
-      >
-        <label class="subpage-field" v-if="defaultEncryption">
-          <span class="subpage-field-label">
-            {{ i18n.current_phrase || "Current password" }}
-          </span>
-          <input
-            class="subpage-text-input"
-            type="password"
-            v-model="currentPhrase"
-            autocomplete="current-password"
-          />
-        </label>
+    </section>
 
-        <label class="subpage-field">
-          <span class="subpage-field-label">
-            {{
-              defaultEncryption
-                ? i18n.new_phrase || "New password"
-                : i18n.ui_master_password
-            }}
+    <section class="subpage-section" v-if="defaultEncryption">
+      <div class="subpage-card">
+        <div class="subpage-row">
+          <span class="subpage-row-icon neutral"><IconLock /></span>
+          <span class="subpage-row-copy">
+            <span class="subpage-row-title">{{ i18n.ui_autolock_title }}</span>
+            <span class="subpage-row-desc">{{ i18n.ui_autolock_desc }}</span>
           </span>
-          <input
-            class="subpage-text-input"
-            type="password"
-            v-model="phrase"
-            autocomplete="new-password"
-          />
-          <span class="subpage-field-help" v-if="passwordPolicyHint">
-            {{ passwordPolicyHint }}
+          <span class="subpage-control security-autolock">
+            <input
+              class="subpage-number-input"
+              type="number"
+              min="0"
+              v-model.number="autolock"
+              :disabled="Boolean(enforceAutolock)"
+              :aria-label="i18n.ui_autolock_minutes"
+            />
+            <span class="subpage-control-unit">{{ i18n.ui_minutes_unit }}</span>
           </span>
-        </label>
-
-        <label class="subpage-field">
-          <span class="subpage-field-label">
-            {{ i18n.confirm_phrase || "Confirm password" }}
-          </span>
-          <input
-            class="subpage-text-input"
-            type="password"
-            v-model="confirm"
-            autocomplete="new-password"
-          />
-        </label>
-
-        <div class="subpage-actions security-actions">
-          <button
-            v-if="defaultEncryption && !enforcePassword"
-            id="security-remove"
-            class="subpage-button danger"
-            type="button"
-            @click="removePassphrase"
-          >
-            {{ i18n.remove || "Remove password" }}
-          </button>
-          <button
-            id="security-save"
-            class="subpage-button primary"
-            type="submit"
-          >
-            {{ i18n.save || i18n.ok }}
-          </button>
         </div>
-      </form>
+      </div>
+    </section>
+
+    <section class="subpage-section">
+      <details
+        class="subpage-card subpage-collapsible"
+        :open="!defaultEncryption"
+      >
+        <summary>
+          <span class="subpage-row-icon"><IconKey /></span>
+          <span class="subpage-row-copy">
+            <span class="subpage-row-title">
+              {{
+                defaultEncryption
+                  ? i18n.ui_change_master_password
+                  : i18n.ui_set_master_password
+              }}
+            </span>
+            <span class="subpage-row-desc" v-if="defaultEncryption">
+              {{ i18n.security_password_row_desc }}
+            </span>
+          </span>
+          <IconArrowLeft class="subpage-row-arrow" />
+        </summary>
+        <form
+          class="subpage-collapsible-body"
+          @submit.prevent="changePassphrase"
+        >
+          <label class="subpage-field" v-if="defaultEncryption">
+            <span class="subpage-field-label">
+              {{ i18n.current_phrase || "Current password" }}
+            </span>
+            <input
+              class="subpage-text-input"
+              type="password"
+              v-model="currentPhrase"
+              autocomplete="current-password"
+            />
+          </label>
+
+          <label class="subpage-field">
+            <span class="subpage-field-label">
+              {{
+                defaultEncryption
+                  ? i18n.new_phrase || "New password"
+                  : i18n.ui_master_password
+              }}
+            </span>
+            <input
+              class="subpage-text-input"
+              type="password"
+              v-model="phrase"
+              autocomplete="new-password"
+            />
+            <span class="subpage-field-help" v-if="passwordPolicyHint">
+              {{ passwordPolicyHint }}
+            </span>
+          </label>
+
+          <label class="subpage-field">
+            <span class="subpage-field-label">
+              {{ i18n.confirm_phrase || "Confirm password" }}
+            </span>
+            <input
+              class="subpage-text-input"
+              type="password"
+              v-model="confirm"
+              autocomplete="new-password"
+            />
+          </label>
+
+          <div class="subpage-actions security-actions">
+            <button
+              v-if="defaultEncryption && !enforcePassword"
+              id="security-remove"
+              class="subpage-button danger"
+              type="button"
+              @click="removePassphrase"
+            >
+              {{ i18n.remove || "Remove password" }}
+            </button>
+            <button
+              id="security-save"
+              class="subpage-button primary"
+              type="submit"
+            >
+              {{ i18n.save || i18n.ok }}
+            </button>
+          </div>
+        </form>
+      </details>
     </section>
   </div>
 </template>
 <script lang="ts">
 import Vue from "vue";
 import { verifyPasswordUsingKeyID } from "../../models/password";
+import IconArrowLeft from "../../../svg/arrow-left.svg";
+import IconKey from "../../../svg/key-solid.svg";
 import IconLock from "../../../svg/lock.svg";
+import { isChromium } from "../../browser";
+import {
+  cancelBiometricBundleSetup,
+  createBiometricUnlockBundle,
+  isBiometricUnlockEnabled,
+  isPlatformAuthenticatorAvailable,
+  removeBiometricUnlock,
+  stageBiometricBundleForCreation,
+} from "../../models/biometric-unlock";
+import { openBiometricWindow } from "../../models/biometric-window";
 
 export default Vue.extend({
   components: {
+    IconArrowLeft,
+    IconKey,
     IconLock,
   },
   data: function () {
@@ -122,7 +213,23 @@ export default Vue.extend({
       phrase: "",
       currentPhrase: "",
       confirm: "",
+      biometricEnabled: false,
+      biometricAvailable: false,
+      biometricBusy: false,
+      biometricError: "",
     };
+  },
+  async created() {
+    try {
+      const [enabled, available] = await Promise.all([
+        isBiometricUnlockEnabled(),
+        isPlatformAuthenticatorAvailable(),
+      ]);
+      this.biometricEnabled = enabled;
+      this.biometricAvailable = available;
+    } catch {
+      this.biometricAvailable = false;
+    }
   },
   computed: {
     enforcePassword: function () {
@@ -146,8 +253,28 @@ export default Vue.extend({
     passwordPolicyHint: function () {
       return this.$store.state.menu.passwordPolicyHint;
     },
+    enforceAutolock() {
+      return this.$store.state.menu.enforceAutolock;
+    },
+    autolock: {
+      get(): number {
+        if (this.$store.state.menu.enforceAutolock) {
+          return this.$store.state.menu.enforceAutolock;
+        }
+        return this.$store.state.menu.autolock;
+      },
+      set(autolock: number) {
+        this.$store.commit("menu/setAutolock", autolock);
+        chrome.runtime.sendMessage({ action: "resetAutolock" }, () => {
+          void chrome.runtime.lastError;
+        });
+      },
+    },
     defaultEncryption: function (): string | undefined {
       return this.$store.state.accounts.defaultEncryption;
+    },
+    isChromium(): boolean {
+      return isChromium;
     },
   },
   methods: {
@@ -206,6 +333,66 @@ export default Vue.extend({
       this.$store.commit("notification/alert", this.i18n.updateSuccess);
       this.$store.commit("style/hideInfo");
       return;
+    },
+
+    async enableBiometricUnlock() {
+      if (this.biometricBusy) return;
+      this.biometricBusy = true;
+      this.biometricError = "";
+      let ticket = "";
+      try {
+        const bundle = createBiometricUnlockBundle(
+          this.$store.state.accounts.encryption,
+          this.$store.state.accounts.defaultEncryption
+        );
+        ticket = await stageBiometricBundleForCreation(bundle);
+        chrome.runtime.sendMessage({ action: "lock" }, (lockResponse) => {
+          if (chrome.runtime.lastError || !lockResponse?.ok) {
+            void cancelBiometricBundleSetup(ticket);
+            this.biometricError = `${this.i18n.biometric_setup_failed} (${
+              lockResponse?.error || "lock failed"
+            })`;
+            this.biometricBusy = false;
+            return;
+          }
+          const setupUrl = chrome.runtime.getURL(
+            `view/biometric.html?ticket=${encodeURIComponent(ticket)}`
+          );
+          openBiometricWindow(setupUrl, {
+            onClosed: () => {
+              this.biometricBusy = false;
+              void isBiometricUnlockEnabled().then((enabled) => {
+                this.biometricEnabled = enabled;
+              });
+            },
+            onError: () => {
+              void cancelBiometricBundleSetup(ticket);
+              this.biometricError = this.i18n.biometric_setup_failed;
+              this.biometricBusy = false;
+            },
+          });
+        });
+      } catch (error) {
+        if (ticket) await cancelBiometricBundleSetup(ticket);
+        const reason =
+          error instanceof Error
+            ? `${error.name}: ${error.message}`
+            : String(error);
+        this.biometricError = `${this.i18n.biometric_setup_failed} (${reason})`;
+        this.biometricBusy = false;
+      }
+    },
+    async disableBiometricUnlock() {
+      this.biometricBusy = true;
+      this.biometricError = "";
+      try {
+        await removeBiometricUnlock();
+        this.biometricEnabled = false;
+      } catch {
+        this.biometricError = this.i18n.biometric_setup_failed;
+      } finally {
+        this.biometricBusy = false;
+      }
     },
   },
 });

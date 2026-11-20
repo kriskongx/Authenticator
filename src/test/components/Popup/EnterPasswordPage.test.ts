@@ -30,9 +30,15 @@ describe("EnterPasswordPage", () => {
         actions: {
           applyPassphrase: sinon.fake(),
         },
-        state: {
-          wrongPassword: false,
+        mutations: {
+          setWrongPassword: (
+            state: { wrongPassword: boolean },
+            value: boolean
+          ) => {
+            state.wrongPassword = value;
+          },
         },
+        state: { wrongPassword: false },
         namespaced: true,
       },
     },
@@ -40,8 +46,7 @@ describe("EnterPasswordPage", () => {
   let store: Store<typeof storeOpts>;
 
   beforeEach(() => {
-    // TODO: find a nicer var
-    storeOpts.modules.accounts.actions.applyPassphrase.resetHistory();
+    // Reset the reactive warning source before constructing each store.
     store = new Vuex.Store(storeOpts);
   });
 
@@ -87,22 +92,112 @@ describe("EnterPasswordPage", () => {
   it("should not show incorrect password message", () => {
     const wrapper = mount(EnterPasswordPage, { store, localVue });
 
-    const errorText = wrapper.find("label.warning");
+    const errorText = wrapper.find(".unlock-message");
 
     errorText.isVisible().should.be.false;
   });
 
   context("Incorrect password was entered", () => {
-    before(() => {
-      storeOpts.modules.accounts.state.wrongPassword = true;
-    });
-
     it("should show incorrect password message", () => {
+      storeOpts.modules.accounts.state.wrongPassword = true;
+      store = new Vuex.Store(storeOpts);
       const wrapper = mount(EnterPasswordPage, { store, localVue });
 
-      const errorText = wrapper.find("label.warning");
+      wrapper.text().should.contain(localVue.prototype.i18n.phrase_not_match);
+    });
+  });
 
-      errorText.isVisible().should.be.true;
+  describe("inline device unlock", () => {
+    const mountPage = () => mount(EnterPasswordPage, { store, localVue });
+
+    it("does nothing when device unlock is not available", async () => {
+      const wrapper = mountPage();
+      const performUnlock = sinon.stub().resolves();
+      wrapper.setMethods({ performUnlock });
+
+      await wrapper.vm.unlockInline(true);
+
+      performUnlock.should.not.have.been.called;
+    });
+
+    it("applies the bundle without opening a window on success", async () => {
+      const wrapper = mountPage();
+      const applyBundle = sinon.stub().resolves();
+      const openWindow = sinon.stub();
+      wrapper.setMethods({
+        performUnlock: sinon.stub().resolves({
+          version: 1,
+          defaultKeyId: "default-key",
+          keys: [{ id: "default-key", secret: "secret" }],
+        }),
+        applyBundle,
+        openUnlockWindow: openWindow,
+      });
+      wrapper.vm.biometricEnabled = true;
+
+      await wrapper.vm.unlockInline(true);
+
+      applyBundle.should.have.been.calledOnce;
+      openWindow.should.not.have.been.called;
+    });
+
+    it("falls back to the window when the prompt is refused", () => {
+      const wrapper = mountPage();
+      const openWindow = sinon.stub();
+      wrapper.setMethods({ openUnlockWindow: openWindow });
+
+      wrapper.vm.handleUnlockFailure(
+        new DOMException("refused", "NotAllowedError"),
+        true,
+        100
+      );
+
+      openWindow.should.have.been.calledOnce;
+    });
+
+    it("reports a cancelled prompt without opening a window", () => {
+      const wrapper = mountPage();
+      const openWindow = sinon.stub();
+      wrapper.setMethods({ openUnlockWindow: openWindow });
+
+      wrapper.vm.handleUnlockFailure(
+        new DOMException("cancelled", "NotAllowedError"),
+        true,
+        5000
+      );
+
+      openWindow.should.not.have.been.called;
+      wrapper.vm.biometricError.should.equal(
+        localVue.prototype.i18n.biometric_unlock_cancelled
+      );
+    });
+
+    it("reports other failures", () => {
+      const wrapper = mountPage();
+      const openWindow = sinon.stub();
+      wrapper.setMethods({ openUnlockWindow: openWindow });
+
+      wrapper.vm.handleUnlockFailure(new Error("decrypt failed"), true, 5000);
+
+      openWindow.should.not.have.been.called;
+      wrapper.vm.biometricError.should.equal(
+        localVue.prototype.i18n.biometric_unlock_failed
+      );
+    });
+
+    it("stays silent when the automatic attempt fails", () => {
+      const wrapper = mountPage();
+      const openWindow = sinon.stub();
+      wrapper.setMethods({ openUnlockWindow: openWindow });
+
+      wrapper.vm.handleUnlockFailure(
+        new DOMException("refused", "NotAllowedError"),
+        false,
+        100
+      );
+
+      openWindow.should.not.have.been.called;
+      wrapper.vm.biometricError.should.equal("");
     });
   });
 });

@@ -13,12 +13,15 @@ import { isChromium } from "../browser";
 import { StorageLocation, UserSettings } from "../models/settings";
 import { DataType } from "../models/otp";
 import { argonHash, argonVerify } from "../models/password";
-
 const LegacyEncryption = "LegacyEncryption";
 export class Accounts implements Module {
   async getModule() {
     const cachedKeyInfo = await this.getCachedKeyInfo();
     const encryption: Map<string, EncryptionInterface> = new Map();
+    const biometricKeys = await this.getCachedBiometricKeys();
+    for (const [id, encryptionKey] of biometricKeys) {
+      encryption.set(id, encryptionKey);
+    }
     if (cachedKeyInfo.cachedKeyId) {
       encryption.set(
         cachedKeyInfo.cachedKeyId,
@@ -36,8 +39,9 @@ export class Accounts implements Module {
     return {
       state: {
         entries,
+        biometricKeys,
         encryption,
-        defaultEncryption: cachedKeyInfo.cachedKeyId,
+        defaultEncryption: cachedKeyInfo.cachedKeyId || "",
         OTPType,
         OTPAlgorithm,
         shouldShowPassphrase,
@@ -143,6 +147,26 @@ export class Accounts implements Module {
         },
         loadCodes(state: AccountsState, newCodes: OTPEntryInterface[]) {
           state.entries = newCodes;
+        },
+        applyCachedKeys(
+          state: AccountsState,
+          payload: {
+            keys: { id: string; secret: string }[];
+            defaultKeyId: string;
+          }
+        ) {
+          const biometricKeys = new Map<string, EncryptionInterface>();
+          for (const key of payload.keys) {
+            const encryption = new Encryption(key.secret, key.id);
+            state.encryption.set(key.id, encryption);
+            biometricKeys.set(key.id, encryption);
+          }
+          if (biometricKeys.size > 0) {
+            state.biometricKeys = biometricKeys;
+          }
+          if (payload.defaultKeyId) {
+            state.defaultEncryption = payload.defaultKeyId;
+          }
         },
         pinEntry(state: AccountsState, entry: OTPEntryInterface) {
           const target = state.entries.find((item) => item.hash === entry.hash);
@@ -565,6 +589,12 @@ export class Accounts implements Module {
               new Encryption(saltedHash, key.id)
             );
             state.state.defaultEncryption = key.id;
+            chrome.runtime.sendMessage(
+              { action: "cachePassphrase", value: saltedHash, keyId: key.id },
+              () => {
+                void chrome.runtime.lastError;
+              }
+            );
 
             await state.dispatch("updateEntries");
 
@@ -572,20 +602,6 @@ export class Accounts implements Module {
             if (isChromium) {
               await BrowserStorage.clearLogs();
             }
-
-            chrome.runtime.sendMessage(
-              {
-                action: "cachePassphrase",
-                value: saltedHash,
-                keyId: key.id,
-              },
-              () => {
-                // Ignore errors - caching is optional
-                if (chrome.runtime.lastError) {
-                  return;
-                }
-              }
-            );
           } else {
             for (const entry of state.state.entries) {
               await entry.changeEncryption(new Encryption("", ""));
@@ -731,6 +747,29 @@ export class Accounts implements Module {
     } = await chrome.storage.session.get();
 
     return { cachedPassphrase, cachedKeyId };
+  }
+  private async getCachedBiometricKeys(): Promise<
+    Map<string, EncryptionInterface>
+  > {
+    const { cachedBiometricKeys } = await chrome.storage.session.get(
+      "cachedBiometricKeys"
+    );
+    if (!Array.isArray(cachedBiometricKeys)) return new Map();
+    const keys = new Map<string, EncryptionInterface>();
+    for (const item of cachedBiometricKeys) {
+      if (
+        !item ||
+        typeof item !== "object" ||
+        !("id" in item) ||
+        typeof item.id !== "string" ||
+        !("secret" in item) ||
+        typeof item.secret !== "string"
+      ) {
+        throw new Error("Invalid biometric unlock session data.");
+      }
+      keys.set(item.id, new Encryption(item.secret, item.id));
+    }
+    return keys;
   }
 
   private async getEntries() {

@@ -148,25 +148,6 @@
             <span class="subpage-switch-track"></span>
           </span>
         </label>
-
-        <label class="subpage-row" v-if="defaultEncryption">
-          <span class="subpage-row-icon"><IconLock /></span>
-          <span class="subpage-row-copy">
-            <span class="subpage-row-title">{{ i18n.autolock }}</span>
-            <span class="subpage-row-desc">{{ i18n.ui_autolock_desc }}</span>
-          </span>
-          <span class="subpage-control">
-            <input
-              class="subpage-number-input"
-              type="number"
-              min="0"
-              v-model.number="autolock"
-              :disabled="Boolean(enforceAutolock)"
-              :aria-label="i18n.ui_autolock_minutes"
-            />
-            <span class="subpage-control-unit">{{ i18n.minutes }}</span>
-          </span>
-        </label>
       </div>
     </section>
 
@@ -203,9 +184,8 @@ import IconBars from "../../../svg/bars.svg";
 import IconCog from "../../../svg/cog.svg";
 import IconExchange from "../../../svg/exchange.svg";
 import IconKey from "../../../svg/key-solid.svg";
-import IconLock from "../../../svg/lock.svg";
-import IconSync from "../../../svg/sync.svg";
 import IconWrench from "../../../svg/wrench.svg";
+import IconSync from "../../../svg/sync.svg";
 
 export default Vue.extend({
   components: {
@@ -214,10 +194,9 @@ export default Vue.extend({
     IconBars,
     IconCog,
     IconExchange,
-    IconKey,
-    IconLock,
-    IconSync,
     IconWrench,
+    IconKey,
+    IconSync,
   },
   computed: {
     zoom: {
@@ -264,31 +243,11 @@ export default Vue.extend({
         this.$store.commit("menu/setTheme", theme);
       },
     },
-    defaultEncryption(): string {
-      return this.$store.state.accounts.defaultEncryption;
-    },
-    enforceAutolock() {
-      return this.$store.state.menu.enforceAutolock;
-    },
-    autolock: {
-      get(): number {
-        if (this.$store.state.menu.enforceAutolock) {
-          return this.$store.state.menu.enforceAutolock;
-        } else {
-          return this.$store.state.menu.autolock;
-        }
-      },
-      set(autolock: number) {
-        this.$store.commit("menu/setAutolock", autolock);
-        chrome.runtime.sendMessage({ action: "resetAutolock" }, () => {
-          if (chrome.runtime.lastError) {
-            return;
-          }
-        });
-      },
-    },
     storageArea() {
       return this.$store.state.menu.storageArea;
+    },
+    isSupported(): boolean {
+      return !isSafari;
     },
     browserSync: {
       get(): boolean {
@@ -298,23 +257,15 @@ export default Vue.extend({
         this.newStorageLocation = value ? "sync" : "local";
       },
     },
-    isSupported: {
-      get(): boolean {
-        return !isFirefox && !isSafari;
-      },
-    },
   },
   data() {
-    return {
-      newStorageLocation: "",
-    };
+    return { newStorageLocation: "" };
   },
-  created() {
-    UserSettings.updateItems().then(() => {
-      this.newStorageLocation =
-        this.$store.state.menu.storageArea ||
-        UserSettings.items.storageLocation;
-    });
+  async created() {
+    this.newStorageLocation =
+      this.$store.state.menu.storageArea ||
+      UserSettings.items.storageLocation ||
+      "";
   },
   methods: {
     popOut() {
@@ -329,6 +280,30 @@ export default Vue.extend({
         type: windowType as chrome.windows.createTypeEnum,
         height: window.innerHeight,
         width: window.innerWidth,
+      });
+    },
+    requireContextMenuPermission() {
+      if (!this.enableContextMenu) {
+        this.syncContextMenu();
+        return;
+      }
+
+      // contextMenus is an optional permission, so it has to be requested from
+      // a user gesture before the background can create the menu entry.
+      chrome.permissions.request(
+        { permissions: ["contextMenus"] },
+        (granted) => {
+          if (!granted) {
+            this.$store.commit("menu/setEnableContextMenu", false);
+            return;
+          }
+          this.syncContextMenu();
+        }
+      );
+    },
+    syncContextMenu() {
+      chrome.runtime.sendMessage({ action: "updateContextMenu" }, () => {
+        void chrome.runtime.lastError;
       });
     },
     async migrateStorage() {
@@ -354,29 +329,6 @@ export default Vue.extend({
       } finally {
         this.$store.commit("currentView/changeView", "PreferencesPage");
       }
-    },
-    requireContextMenuPermission() {
-      chrome.permissions.request(
-        {
-          permissions: ["contextMenus"],
-        },
-        (granted) => {
-          if (!granted) {
-            this.enableContextMenu = false;
-            return;
-          }
-          chrome.runtime.sendMessage(
-            {
-              action: "updateContextMenu",
-            },
-            () => {
-              if (chrome.runtime.lastError) {
-                return;
-              }
-            }
-          );
-        }
-      );
     },
   },
 });

@@ -62,6 +62,7 @@ interface StyleState {
 
 interface AccountsState {
   entries: OTPEntryInterface[];
+  biometricKeys: Map<string, EncryptionInterface>;
   defaultEncryption: string;
   encryption: Map<string, EncryptionInterface>;
   OTPType: number;

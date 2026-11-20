@@ -9,171 +9,417 @@ import {
   okToInjectContentScript,
 } from "./utils";
 import { CodeState } from "./models/otp";
-
 import { getOTPAuthPerLineFromOPTAuthMigration } from "./models/migration";
 import { parseOtpAuthUri } from "./models/otpauth-uri";
 import { isChrome, isFirefox } from "./browser";
 import { UserSettings } from "./models/settings";
+import {
+  BiometricCredentialEnrollment,
+  finishBiometricCredentialEnrollment,
+} from "./models/biometric-unlock";
 
-let contentTab: chrome.tabs.Tab | undefined;
+type ContentTab = Pick<chrome.tabs.Tab, "id" | "windowId">;
 
-chrome.runtime.onMessage.addListener(async (message, sender) => {
+type CaptureInfo = {
+  captureBoxLeft: number;
+  captureBoxTop: number;
+  captureBoxWidth: number;
+  captureBoxHeight: number;
+};
+type RuntimeMessage =
+  | { action: "getCapture"; info: CaptureInfo }
+  | { action: "getTotp"; info: string }
+  | { action: "cachePassphrase"; value: string; keyId: string }
+  | {
+      action: "finishBiometricEnrollment";
+      ticket: string;
+      enrollment: BiometricCredentialEnrollment;
+    }
+  | { action: "dropbox" | "drive" | "onedrive" }
+  | { action: "lock" | "resetAutolock" | "updateContextMenu" }
+  | { action: "updateContentTab"; data: ContentTab };
+
+type WebDAVRequestMessage = {
+  action: "webdavRequest";
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: string;
+  timeout?: number;
+};
+
+let contentTab: ContentTab | undefined;
+
+chrome.runtime.onMessage.addListener((rawMessage, sender, sendResponse) => {
+  const message: unknown = rawMessage;
+  const action =
+    isObject(message) && typeof message.action === "string"
+      ? message.action
+      : "(unknown)";
+
+  if (isObject(message) && "action" in message && message.action === "lock") {
+    void chrome.storage.session
+      .set({
+        cachedPassphrase: null,
+        cachedKeyId: null,
+        cachedBiometricKeys: null,
+        cachedBiometricDefaultKeyId: null,
+      })
+      .then(
+        () => sendResponse({ ok: true }),
+        (error: unknown) => {
+          console.error("Failed to lock the vault", error);
+          sendResponse({ ok: false });
+        }
+      );
+    return true;
+  }
+
+  if (isWebDAVRequest(message)) {
+    void handleWebDAVRequest(message).then(
+      (response) => sendResponse(response),
+      (error: unknown) =>
+        sendResponse({
+          status: 0,
+          statusText: error instanceof Error ? error.message : "Network Error",
+          headers: "",
+          responseText: "",
+        })
+    );
+    return true;
+  }
+
+  if (!isRuntimeMessage(message)) {
+    if (action === "finishBiometricEnrollment") {
+      console.warn("[background] rejected finishBiometricEnrollment", message);
+      sendResponse({ ok: false, error: "biometricMessageInvalid" });
+    }
+    return false;
+  }
+  void handleRuntimeMessage(message, sender).then(
+    () => sendResponse({ ok: true }),
+    (error: unknown) => {
+      console.error("Failed to handle extension message", action, error);
+      sendResponse({
+        ok: false,
+        error:
+          error instanceof Error
+            ? `${error.name}: ${error.message}`
+            : String(error),
+      });
+    }
+  );
+  return true;
+});
+
+function isCaptureInfo(value: unknown): value is CaptureInfo {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  return (
+    "captureBoxLeft" in value &&
+    typeof value.captureBoxLeft === "number" &&
+    "captureBoxTop" in value &&
+    typeof value.captureBoxTop === "number" &&
+    "captureBoxWidth" in value &&
+    typeof value.captureBoxWidth === "number" &&
+    "captureBoxHeight" in value &&
+    typeof value.captureBoxHeight === "number"
+  );
+}
+
+function isRuntimeMessage(value: unknown): value is RuntimeMessage {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    !("action" in value)
+  ) {
+    return false;
+  }
+
+  switch (value.action) {
+    case "getCapture":
+      return "info" in value && isCaptureInfo(value.info);
+    case "getTotp":
+      return "info" in value && typeof value.info === "string";
+    case "cachePassphrase":
+      return (
+        "value" in value &&
+        typeof value.value === "string" &&
+        "keyId" in value &&
+        typeof value.keyId === "string"
+      );
+    case "finishBiometricEnrollment":
+      return (
+        "ticket" in value &&
+        typeof value.ticket === "string" &&
+        "enrollment" in value &&
+        parseBiometricEnrollment(value.enrollment) !== null
+      );
+    case "dropbox":
+    case "lock":
+    case "resetAutolock":
+    case "updateContextMenu":
+      return true;
+    case "updateContentTab":
+      return (
+        "data" in value &&
+        typeof value.data === "object" &&
+        value.data !== null &&
+        !Array.isArray(value.data) &&
+        "id" in value.data &&
+        typeof value.data.id === "number" &&
+        "windowId" in value.data &&
+        typeof value.data.windowId === "number"
+      );
+    default:
+      return false;
+  }
+}
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseBiometricEnrollment(
+  value: unknown
+): BiometricCredentialEnrollment | null {
+  if (
+    !isObject(value) ||
+    typeof value.credentialId !== "string" ||
+    typeof value.extensionId !== "string" ||
+    typeof value.prfSalt !== "string" ||
+    typeof value.kdfSalt !== "string" ||
+    typeof value.initialPrfOutput !== "string"
+  ) {
+    return null;
+  }
+  return {
+    credentialId: value.credentialId,
+    extensionId: value.extensionId,
+    prfSalt: value.prfSalt,
+    kdfSalt: value.kdfSalt,
+    initialPrfOutput: value.initialPrfOutput,
+  };
+}
+
+function isWebDAVRequest(value: unknown): value is WebDAVRequestMessage {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    !("action" in value) ||
+    value.action !== "webdavRequest" ||
+    !("method" in value) ||
+    typeof value.method !== "string" ||
+    !("url" in value) ||
+    typeof value.url !== "string" ||
+    !("headers" in value) ||
+    typeof value.headers !== "object" ||
+    value.headers === null ||
+    Array.isArray(value.headers) ||
+    ("body" in value && typeof value.body !== "string") ||
+    ("timeout" in value && typeof value.timeout !== "number")
+  ) {
+    return false;
+  }
+
+  return Object.values(value.headers).every(
+    (header) => typeof header === "string"
+  );
+}
+async function handleRuntimeMessage(
+  message: RuntimeMessage,
+  sender: chrome.runtime.MessageSender
+) {
   await UserSettings.updateItems();
 
   if (message.action === "getCapture") {
-    if (!sender.tab) {
-      return;
-    }
+    if (sender.tab?.id === undefined) return;
     const url = await getCapture(sender.tab);
-    if (contentTab && contentTab.id) {
-      message.info.url = url;
-      chrome.tabs.sendMessage(contentTab.id, {
-        action: "sendCaptureUrl",
-        info: message.info,
-      });
-    }
+    sendTabMessage(sender.tab.id, {
+      action: "sendCaptureUrl",
+      info: { ...message.info, url },
+    });
   } else if (message.action === "getTotp") {
-    getTotp(message.info);
+    await getTotp(message.info);
   } else if (message.action === "cachePassphrase") {
-    chrome.storage.session.set({
+    if (
+      sender.id !== chrome.runtime.id ||
+      !sender.url?.startsWith(chrome.runtime.getURL(""))
+    ) {
+      throw new Error("biometricUnlockInvalidSender");
+    }
+    await chrome.storage.session.set({
       cachedPassphrase: message.value,
       cachedKeyId: message.keyId,
     });
-    chrome.alarms.clear("autolock");
-    setAutolock();
-  } else if (["dropbox", "drive", "onedrive"].indexOf(message.action) > -1) {
+    await chrome.alarms.clear("autolock");
+    await setAutolock();
+  } else if (["dropbox", "drive", "onedrive"].includes(message.action)) {
     getBackupToken(message.action);
+  } else if (message.action === "finishBiometricEnrollment") {
+    if (
+      sender.id !== chrome.runtime.id ||
+      !sender.url?.startsWith(chrome.runtime.getURL(""))
+    ) {
+      console.warn("[background] invalid sender for enrollment", sender.url);
+      throw new Error("biometricUnlockInvalidSender");
+    }
+    const enrollment = parseBiometricEnrollment(message.enrollment);
+    if (!enrollment || enrollment.extensionId !== chrome.runtime.id) {
+      throw new Error("biometricUnlockInvalidBundle");
+    }
+    console.info("[background] finishing enrollment", {
+      ticket: message.ticket,
+      credentialIdLength: enrollment.credentialId.length,
+    });
+    await finishBiometricCredentialEnrollment(message.ticket, enrollment);
+    await setAutolock();
   } else if (message.action === "lock") {
-    chrome.storage.session.set({ cachedPassphrase: null, cachedKeyId: null });
+    await chrome.storage.session.set({
+      cachedPassphrase: null,
+      cachedKeyId: null,
+      cachedBiometricKeys: null,
+      cachedBiometricDefaultKeyId: null,
+    });
   } else if (message.action === "resetAutolock") {
-    chrome.alarms.clear("autolock");
-    setAutolock();
+    await chrome.alarms.clear("autolock");
+    await setAutolock();
   } else if (message.action === "updateContentTab") {
     contentTab = message.data;
   } else if (message.action === "updateContextMenu") {
-    updateContextMenu();
-  } else if (message.action === "webdavRequest") {
-    return handleWebDAVRequest(message);
+    await updateContextMenu();
   }
+}
 
-  // https://stackoverflow.com/a/56483156
-  return true;
-});
+function sendTabMessage(tabId: number, message: unknown) {
+  chrome.tabs.sendMessage(tabId, message, () => {
+    const error = chrome.runtime.lastError;
+    if (!error) {
+      return;
+    }
+    if (contentTab?.id === tabId) {
+      contentTab = undefined;
+    }
+    if (!error.message?.includes("Receiving end does not exist")) {
+      console.warn("Unable to deliver tab message", error.message);
+    }
+  });
+}
+
+function sendRuntimeMessage(message: unknown) {
+  chrome.runtime.sendMessage(message, () => {
+    void chrome.runtime.lastError;
+  });
+}
 
 chrome.alarms.onAlarm.addListener(() => {
-  chrome.storage.session.set({ cachedPassphrase: null, cachedKeyId: null });
-  if (contentTab && contentTab.id) {
-    chrome.tabs.sendMessage(contentTab.id, { action: "stopCapture" });
+  void chrome.storage.session
+    .set({
+      cachedPassphrase: null,
+      cachedKeyId: null,
+      cachedBiometricKeys: null,
+      cachedBiometricDefaultKeyId: null,
+    })
+    .catch((error) =>
+      console.error("Failed to clear cached passphrase", error)
+    );
+  if (contentTab?.id !== undefined) {
+    sendTabMessage(contentTab.id, { action: "stopCapture" });
   }
-  chrome.runtime.sendMessage({ action: "stopImport" });
-
-  // https://stackoverflow.com/a/56483156
-  return true;
+  sendRuntimeMessage({ action: "stopImport" });
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (contentTab?.id === tabId) {
+    contentTab = undefined;
+  }
 });
 
 async function getCapture(tab: chrome.tabs.Tab) {
-  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-    format: "png",
-  });
-
-  return dataUrl;
+  return chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
 }
 
-async function getTotp(text: string, silent = false) {
-  if (!contentTab || !contentTab.id || !text) {
+async function getTotp(text: string, silent = false): Promise<boolean> {
+  const tabId = contentTab?.id;
+  if (tabId === undefined || !text) {
     return false;
   }
-  const id = contentTab.id;
 
-  if (text.indexOf("otpauth://") !== 0) {
-    if (text.indexOf("otpauth-migration://") === 0) {
+  if (!text.startsWith("otpauth://")) {
+    if (text.startsWith("otpauth-migration://")) {
       const otpUrls = getOTPAuthPerLineFromOPTAuthMigration(text);
       if (otpUrls.length === 0) {
-        !silent && chrome.tabs.sendMessage(id, { action: "errorenc" });
+        if (!silent) sendTabMessage(tabId, { action: "errorenc" });
         return false;
       }
 
-      const getTotpPromises: Array<Promise<boolean>> = [];
-      for (const otpUrl of otpUrls) {
-        getTotpPromises.push(getTotp(otpUrl, true));
-      }
-
-      const getTotpResults = await Promise.allSettled(getTotpPromises);
-      const failedCount = getTotpResults.filter(
+      const results = await Promise.allSettled(
+        otpUrls.map((otpUrl) => getTotp(otpUrl, true))
+      );
+      const failedCount = results.filter(
         (result) => result.status === "rejected" || result.value !== true
       ).length;
       if (failedCount === otpUrls.length) {
-        !silent && chrome.tabs.sendMessage(id, { action: "migrationfail" });
+        if (!silent) sendTabMessage(tabId, { action: "migrationfail" });
         return false;
       }
-
       if (failedCount > 0) {
-        !silent &&
-          chrome.tabs.sendMessage(id, { action: "migrationpartlyfail" });
+        if (!silent) sendTabMessage(tabId, { action: "migrationpartlyfail" });
         return true;
       }
-
-      !silent && chrome.tabs.sendMessage(id, { action: "migrationsuccess" });
-      return true;
-    } else if (text === "error decoding QR Code") {
-      !silent && chrome.tabs.sendMessage(id, { action: "errorqr" });
-      return false;
-    } else {
-      !silent && chrome.tabs.sendMessage(id, { action: "text", text });
+      if (!silent) sendTabMessage(tabId, { action: "migrationsuccess" });
       return true;
     }
-  } else {
-    const parsed = parseOtpAuthUri(text);
-    if (!parsed) {
-      !silent && chrome.tabs.sendMessage(id, { action: "errorqr" });
+
+    if (text === "error decoding QR Code") {
+      if (!silent) sendTabMessage(tabId, { action: "errorqr" });
       return false;
     }
-
-    const {
-      cachedPassphrase,
-      cachedKeyId,
-    } = await chrome.storage.session.get();
-    const encryption = new Encryption(cachedPassphrase, cachedKeyId);
-    if (
-      // If the entries are encrypted and we aren't unlocked, error.
-      (await EntryStorage.hasEncryptionKey()) !==
-      encryption.getEncryptionStatus()
-    ) {
-      !silent && chrome.tabs.sendMessage(id, { action: "errorenc" });
-      return false;
-    }
-
-    const hash = crypto.randomUUID();
-    const entryData: { [hash: string]: RawOTPStorage } = {
-      [hash]: {
-        account: parsed.account,
-        hash,
-        issuer: parsed.issuer,
-        secret: parsed.secret,
-        type: parsed.type,
-        encrypted: false,
-        index: 0,
-        counter: parsed.counter || 0,
-        pinned: false,
-      },
-    };
-    if (parsed.period) {
-      entryData[hash].period = parsed.period;
-    }
-    if (parsed.digits) {
-      entryData[hash].digits = parsed.digits;
-    }
-    if (parsed.algorithm) {
-      entryData[hash].algorithm = parsed.algorithm;
-    }
-
-    await EntryStorage.import(encryption, entryData);
-    !silent &&
-      chrome.tabs.sendMessage(id, { action: "added", account: parsed.account });
+    if (!silent) sendTabMessage(tabId, { action: "text", text });
     return true;
   }
-}
 
+  const parsed = parseOtpAuthUri(text);
+  if (!parsed) {
+    if (!silent) sendTabMessage(tabId, { action: "errorqr" });
+    return false;
+  }
+
+  const { cachedPassphrase, cachedKeyId } = await chrome.storage.session.get();
+  const encryption = new Encryption(cachedPassphrase, cachedKeyId);
+  if (
+    (await EntryStorage.hasEncryptionKey()) !== encryption.getEncryptionStatus()
+  ) {
+    if (!silent) sendTabMessage(tabId, { action: "errorenc" });
+    return false;
+  }
+
+  const hash = crypto.randomUUID();
+  const entryData: { [hash: string]: RawOTPStorage } = {
+    [hash]: {
+      account: parsed.account,
+      hash,
+      issuer: parsed.issuer,
+      secret: parsed.secret,
+      type: parsed.type,
+      encrypted: false,
+      index: 0,
+      counter: parsed.counter || 0,
+      pinned: false,
+    },
+  };
+  if (parsed.period) entryData[hash].period = parsed.period;
+  if (parsed.digits) entryData[hash].digits = parsed.digits;
+  if (parsed.algorithm) entryData[hash].algorithm = parsed.algorithm;
+
+  await EntryStorage.import(encryption, entryData);
+  if (!silent) {
+    sendTabMessage(tabId, { action: "added", account: parsed.account });
+  }
+  return true;
+}
 function getBackupToken(service: string) {
   if (isChrome && service === "drive") {
     chrome.identity.getAuthToken(
@@ -186,8 +432,7 @@ function getBackupToken(service: string) {
           return false;
         }
         UserSettings.items.driveToken = value;
-        UserSettings.commitItems();
-        chrome.runtime.sendMessage({ action: "drivetoken", value });
+        void UserSettings.commitItems();
         return true;
       }
     );
@@ -383,9 +628,6 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   if (url) {
     chrome.tabs.create({ url, active: true });
   }
-
-  // https://stackoverflow.com/a/56483156
-  return true;
 });
 
 chrome.commands.onCommand.addListener(async (command: string) => {
@@ -411,7 +653,7 @@ chrome.commands.onCommand.addListener(async (command: string) => {
         });
 
         contentTab = tab;
-        chrome.tabs.sendMessage(tab.id, { action: "capture" });
+        sendTabMessage(tab.id, { action: "capture" });
       }
       break;
 
@@ -442,9 +684,9 @@ chrome.commands.onCommand.addListener(async (command: string) => {
             entry.code !== CodeState.Encrypted &&
             entry.code !== CodeState.Invalid
           ) {
-            chrome.tabs.sendMessage(tab.id, {
+            sendTabMessage(tab.id, {
               action: "pastecode",
-              code: matchedEntries[0].code,
+              code: entry.code,
             });
           }
         }
@@ -454,9 +696,7 @@ chrome.commands.onCommand.addListener(async (command: string) => {
     default:
       break;
   }
-
-  // https://stackoverflow.com/a/56483156
-  return true;
+  return;
 });
 
 async function setAutolock() {
@@ -516,9 +756,6 @@ async function updateContextMenu() {
               height: 400,
               width: 320,
             });
-
-            // https://stackoverflow.com/a/56483156
-            return true;
           });
         } else {
           chrome.contextMenus.removeAll();

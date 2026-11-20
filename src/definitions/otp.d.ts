@@ -31,6 +31,7 @@ interface EncryptionInterface {
   decryptSecretString(entry: string): string | null;
   decryptEncSecret(entry: OTPEntryInterface): RawOTPStorage | null;
   getEncryptionStatus(): boolean;
+  getEncryptionPassword(): string;
   updateEncryptionPassword(password: string): void;
   getEncryptionKeyId(): string;
   setEncryptionKeyId(id: string): void;
