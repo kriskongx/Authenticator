@@ -33,7 +33,7 @@ describe("EntryComponent", () => {
     expect(context.style.hotpDisabled).to.equal(false);
   });
 
-  it("does not intercept editing keystrokes with entry shortcuts", async () => {
+  it("preserves keyboard behavior and restores focus when swipe actions close", async () => {
     const localVue = createLocalVue();
     localVue.use(Vuex);
     localVue.prototype.i18n = {
@@ -92,6 +92,7 @@ describe("EntryComponent", () => {
     const wrapper = shallowMount(EntryComponent, {
       localVue,
       store,
+      attachTo: document.body,
       propsData: {
         entry,
         selected: false,
@@ -99,7 +100,6 @@ describe("EntryComponent", () => {
         tabindex: 0,
       },
     });
-
     await wrapper.setData({ detailsOpen: true, detailsMode: "edit" });
     const textarea = wrapper.find("textarea").element;
 
@@ -115,6 +115,13 @@ describe("EntryComponent", () => {
       );
     }
 
+    await wrapper.setProps({ swipeOpen: true });
+    const deleteButton = wrapper.find(".entry-swipe-action.delete");
+    (deleteButton.element as HTMLElement).focus();
+    expect(document.activeElement).to.equal(deleteButton.element);
+
+    await wrapper.setProps({ swipeOpen: false });
+    expect(document.activeElement).to.equal(wrapper.find(".entry").element);
     wrapper.destroy();
   });
 });

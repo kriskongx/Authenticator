@@ -7,6 +7,7 @@
     }"
   >
     <div
+      ref="swipeActions"
       class="entry-swipe-actions"
       v-bind:aria-hidden="swipeOpen ? 'false' : 'true'"
       v-on:click.stop
@@ -34,6 +35,7 @@
     </div>
 
     <div
+      ref="entryRoot"
       role="button"
       data-x-role="entry"
       v-bind:tabindex="tabindex"
@@ -339,6 +341,9 @@ export default Vue.extend({
       if (!this.swipeDragging) {
         this.swipeOffset = open ? -SWIPE_ACTION_WIDTH : 0;
       }
+      if (!open) {
+        this.returnFocusFromSwipeActions();
+      }
     },
   },
   methods: {
@@ -393,7 +398,15 @@ export default Vue.extend({
       this.syncDraft();
       this.detailsOpen = true;
     },
+    returnFocusFromSwipeActions() {
+      const actions = this.$refs.swipeActions as HTMLElement | undefined;
+      const entry = this.$refs.entryRoot as HTMLElement | undefined;
+      if (actions?.contains(document.activeElement)) {
+        entry?.focus();
+      }
+    },
     closeSwipeActions() {
+      this.returnFocusFromSwipeActions();
       this.swipeOffset = 0;
       this.$emit("close-swipe");
     },
