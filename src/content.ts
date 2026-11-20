@@ -62,8 +62,7 @@ if (!document.getElementById("__ga_grayLayout__")) {
         break;
     }
 
-    // https://stackoverflow.com/a/56483156
-    return true;
+    return false;
   });
 }
 

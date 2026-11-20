@@ -90,8 +90,7 @@ export default Vue.extend({
         this.shouldShowPassphrase = true;
       }
 
-      // https://stackoverflow.com/a/56483156
-      return true;
+      return false;
     });
   },
 });

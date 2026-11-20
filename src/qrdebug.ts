@@ -13,8 +13,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     );
   }
 
-  // https://stackoverflow.com/a/56483156
-  return true;
+  return false;
 });
 
 function getQrDebug(
