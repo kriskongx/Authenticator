@@ -2089,6 +2089,30 @@
     "message": "Upload a new backup once this many days have passed (1-365)",
     "description": "Interval description."
   },
+  "webdav_last_auto_backup": {
+    "message": "Last automatic backup",
+    "description": "Label before the timestamp of the last successful automatic WebDAV backup."
+  },
+  "webdav_never_auto_backed_up": {
+    "message": "No automatic backup yet",
+    "description": "Shown when no automatic WebDAV backup has succeeded yet."
+  },
+  "biometric_verify_identity": {
+    "message": "Verify with device",
+    "description": "Button to verify current master password ownership using device biometrics."
+  },
+  "biometric_verified_identity": {
+    "message": "Verified with device",
+    "description": "Status shown after verifying identity with device biometrics."
+  },
+  "biometric_decrypt_backup": {
+    "message": "Decrypt with device",
+    "description": "Button to decrypt an encrypted backup using the device unlock key."
+  },
+  "biometric_backup_key_mismatch": {
+    "message": "This backup uses a different password than your current device unlock key. Enter the backup password instead.",
+    "description": "Shown when biometric backup decryption cannot match the backup key."
+  },
   "ui_days_unit": {
     "message": "days",
     "description": "Days unit."
@@ -2104,5 +2128,17 @@
   "webdav_backup_hour_now": {
     "message": "As soon as due",
     "description": "Upload as soon as the interval is due."
+  },
+  "ui_show_password": {
+    "message": "Show password",
+    "description": "Reveal a password field."
+  },
+  "ui_hide_password": {
+    "message": "Hide password",
+    "description": "Hide a revealed password field."
+  },
+  "backup_failed_locked": {
+    "message": "The vault is locked, so no encrypted backup was created.",
+    "description": "Backup skipped because the vault is locked."
   }
 }

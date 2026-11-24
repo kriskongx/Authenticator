@@ -30,13 +30,13 @@ $themes: (
     white-transparent: rgba(0, 0, 0, 0.5),
     grey-1: white,
     grey-2: white,
-    grey-3: white,
+    grey-3: #141414,
     grey-background: black,
     blue-1: yellow,
     yellow-1: yellow,
     yellow-2: yellow,
-    red-1: red,
-    red-2: red,
+    red-1: #ff453a,
+    red-2: #3b0000,
     black-search: white,
     white-search: black,
     grey-search: white,
@@ -120,29 +120,26 @@ $themes: (
   ),
 );
 
-$theme-map: null;
+@each $theme, $map in $themes {
+  $selector: if(
+    $theme == normal,
+    ":root, .theme-#{$theme}",
+    ".theme-#{$theme}"
+  );
 
-@mixin themify($themes: $themes) {
-  @each $theme, $map in $themes {
-    .theme-#{$theme} & {
-      $theme-map: () !global;
-      @each $key, $submap in $map {
-        $value: map-get(map-get($themes, $theme), "#{$key}");
-        $theme-map: map-merge(
-          $theme-map,
-          (
-            $key: $value,
-          )
-        ) !global;
-      }
-      @content;
-      $theme-map: null !global;
+  #{$selector} {
+    @each $key, $value in $map {
+      --theme-#{$key}: #{$value};
     }
   }
 }
 
+@mixin themify($themes: $themes) {
+  @content;
+}
+
 @function themed($key) {
-  @return map-get($theme-map, $key);
+  @return var(--theme-#{$key});
 }
 
 // Shared
@@ -228,5 +225,86 @@ $theme-map: null;
 a {
   @include themify($themes) {
     color: themed("blue-1");
+  }
+}
+
+// Password fields expose a reveal toggle; the wrapper owns the positioning so
+// the toggle also works inside grid/flex form rows.
+.password-input {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+
+  input {
+    width: 100%;
+    margin: 0;
+    box-sizing: border-box;
+    padding-right: 34px;
+  }
+
+  &.has-biometric input {
+    padding-right: 60px;
+  }
+}
+
+.password-input-actions {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.password-input-toggle {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  cursor: pointer;
+  @include themify($themes) {
+    color: themed("grey-1");
+  }
+
+  svg {
+    width: 15px;
+    height: 15px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  &:hover:not(:disabled) {
+    @include themify($themes) {
+      color: themed("black-1");
+      background: themed("grey-3");
+    }
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+}
+
+.password-input-biometric {
+  @include themify($themes) {
+    color: themed("blue-1");
+  }
+
+  &:hover:not(:disabled) {
+    @include themify($themes) {
+      color: themed("blue-1");
+      background: themed("grey-3");
+    }
   }
 }

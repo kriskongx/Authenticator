@@ -2089,6 +2089,30 @@
     "message": "距上次备份超过该天数后自动上传一份（1–365）",
     "description": "Interval description."
   },
+  "webdav_last_auto_backup": {
+    "message": "上次自动备份成功",
+    "description": "Label before the timestamp of the last successful automatic WebDAV backup."
+  },
+  "webdav_never_auto_backed_up": {
+    "message": "尚未执行自动备份",
+    "description": "Shown when no automatic WebDAV backup has succeeded yet."
+  },
+  "biometric_verify_identity": {
+    "message": "使用设备解锁验证",
+    "description": "Button to verify current master password ownership using device biometrics."
+  },
+  "biometric_verified_identity": {
+    "message": "已通过设备解锁验证",
+    "description": "Status shown after verifying identity with device biometrics."
+  },
+  "biometric_decrypt_backup": {
+    "message": "使用设备解锁解密",
+    "description": "Button to decrypt an encrypted backup using the device unlock key."
+  },
+  "biometric_backup_key_mismatch": {
+    "message": "该备份未使用当前设备解锁关联的主密码密钥，请手动输入备份密码。",
+    "description": "Shown when biometric backup decryption cannot match the backup key."
+  },
   "ui_days_unit": {
     "message": "天",
     "description": "Days unit."
@@ -2104,5 +2128,17 @@
   "webdav_backup_hour_now": {
     "message": "到期后立即",
     "description": "Upload as soon as the interval is due."
+  },
+  "ui_show_password": {
+    "message": "显示密码",
+    "description": "Reveal a password field."
+  },
+  "ui_hide_password": {
+    "message": "隐藏密码",
+    "description": "Hide a revealed password field."
+  },
+  "backup_failed_locked": {
+    "message": "密码库未解锁，无法生成加密备份。",
+    "description": "Backup skipped because the vault is locked."
   }
 }

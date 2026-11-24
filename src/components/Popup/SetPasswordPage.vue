@@ -97,7 +97,7 @@
     <section class="subpage-section">
       <details
         class="subpage-card subpage-collapsible"
-        :open="!defaultEncryption"
+        :open="!defaultEncryption || biometricVerified"
       >
         <summary>
           <span class="subpage-row-icon"><IconKey /></span>
@@ -123,12 +123,19 @@
             <span class="subpage-field-label">
               {{ i18n.current_phrase || "Current password" }}
             </span>
-            <input
-              class="subpage-text-input"
-              type="password"
+            <a-password-input
+              v-if="!biometricVerified"
+              input-class="subpage-text-input"
               v-model="currentPhrase"
               autocomplete="current-password"
+              :biometric="biometricEnabled"
+              :biometric-disabled="biometricVerifying"
+              :biometric-title="i18n.biometric_verify_identity"
+              @biometric="verifyCurrentPasswordWithBiometrics"
             />
+            <div v-else class="subpage-field-help">
+              {{ i18n.biometric_verified_identity }}
+            </div>
           </label>
 
           <label class="subpage-field">
@@ -139,9 +146,8 @@
                   : i18n.ui_master_password
               }}
             </span>
-            <input
-              class="subpage-text-input"
-              type="password"
+            <a-password-input
+              input-class="subpage-text-input"
               v-model="phrase"
               autocomplete="new-password"
             />
@@ -154,9 +160,8 @@
             <span class="subpage-field-label">
               {{ i18n.confirm_phrase || "Confirm password" }}
             </span>
-            <input
-              class="subpage-text-input"
-              type="password"
+            <a-password-input
+              input-class="subpage-text-input"
               v-model="confirm"
               autocomplete="new-password"
             />
@@ -231,7 +236,10 @@
 </template>
 <script lang="ts">
 import Vue from "vue";
-import { verifyPasswordUsingKeyID } from "../../models/password";
+import {
+  verifyDerivedKeyUsingKeyID,
+  verifyPasswordUsingKeyID,
+} from "../../models/password";
 import IconArrowLeft from "../../../svg/arrow-left.svg";
 import IconCode from "../../../svg/code.svg";
 import IconKey from "../../../svg/key-solid.svg";
@@ -245,11 +253,15 @@ import {
 } from "../../models/api-access";
 import {
   cancelBiometricBundleSetup,
+  clearBiometricReauth,
+  consumeBiometricReauthVerified,
   createBiometricUnlockBundle,
   isBiometricUnlockEnabled,
+  isDetachedPopupWindow,
   isPlatformAuthenticatorAvailable,
   removeBiometricUnlock,
   stageBiometricBundleForCreation,
+  unlockBiometricBackupKeys,
 } from "../../models/biometric-unlock";
 import { openBiometricWindow } from "../../models/biometric-window";
 
@@ -269,21 +281,31 @@ export default Vue.extend({
       biometricAvailable: false,
       biometricBusy: false,
       biometricError: "",
+      biometricVerified: false,
+      biometricVerifying: false,
       apiEnabled: false,
       apiToken: "",
     };
   },
   async created() {
-    const [enabled, available, apiEnabled, apiToken] = await Promise.all([
+    const [
+      enabled,
+      available,
+      apiEnabled,
+      apiToken,
+      reauthVerified,
+    ] = await Promise.all([
       isBiometricUnlockEnabled().catch(() => false),
       isPlatformAuthenticatorAvailable().catch(() => false),
       isApiAccessEnabled().catch(() => false),
       getApiToken().catch(() => ""),
+      consumeBiometricReauthVerified(this.defaultEncryption).catch(() => false),
     ]);
     this.biometricEnabled = enabled;
     this.biometricAvailable = available;
     this.apiEnabled = apiEnabled;
     this.apiToken = apiToken;
+    this.biometricVerified = enabled && reauthVerified;
   },
   computed: {
     enforcePassword: function () {
@@ -318,9 +340,10 @@ export default Vue.extend({
         return this.$store.state.menu.autolock;
       },
       set(autolock: number) {
-        this.$store.commit("menu/setAutolock", autolock);
-        chrome.runtime.sendMessage({ action: "resetAutolock" }, () => {
-          void chrome.runtime.lastError;
+        void this.$store.dispatch("menu/saveAutolock", autolock).then(() => {
+          chrome.runtime.sendMessage({ action: "resetAutolock" }, () => {
+            void chrome.runtime.lastError;
+          });
         });
       },
     },
@@ -360,24 +383,110 @@ export default Vue.extend({
         | undefined;
       input?.select();
     },
-    async removePassphrase() {
-      this.$store.commit("currentView/changeView", "LoadingPage");
-
-      if (this.defaultEncryption) {
-        const isCorrectPassword = await verifyPasswordUsingKeyID(
-          this.defaultEncryption,
-          this.currentPhrase
+    async verifyCurrentPasswordWithBiometrics(): Promise<boolean> {
+      if (
+        !this.defaultEncryption ||
+        !this.biometricEnabled ||
+        this.biometricVerifying
+      ) {
+        return this.biometricVerified;
+      }
+      this.biometricVerifying = true;
+      try {
+        const keys = await unlockBiometricBackupKeys();
+        const derivedSecret = keys.get(this.defaultEncryption) || "";
+        const activeEncryption = this.$store.state.accounts.encryption.get(
+          this.defaultEncryption
         );
-        if (!isCorrectPassword) {
-          this.$store.commit("notification/alert", this.i18n.phrase_not_match);
-          this.$store.commit("currentView/changeView", "SetPasswordPage");
+        const activeSecret = activeEncryption?.getEncryptionPassword();
+        const verified = activeSecret
+          ? derivedSecret === activeSecret
+          : await verifyDerivedKeyUsingKeyID(
+              this.defaultEncryption,
+              derivedSecret
+            );
+        if (!verified) {
+          this.$store.commit("notification/alert", this.i18n.phrase_wrong);
+          return false;
+        }
+        if (!isDetachedPopupWindow()) {
+          await this.completeBiometricReauth(this.defaultEncryption);
+        }
+        this.biometricVerified = true;
+        return true;
+      } catch (error) {
+        const notAllowed =
+          error instanceof Error && error.name === "NotAllowedError";
+        this.$store.commit(
+          "notification/alert",
+          notAllowed
+            ? this.i18n.biometric_unlock_cancelled
+            : this.i18n.biometric_unlock_failed
+        );
+        return false;
+      } finally {
+        this.biometricVerifying = false;
+      }
+    },
+    completeBiometricReauth(keyId: string): Promise<boolean> {
+      return new Promise<boolean>((resolve) => {
+        chrome.runtime.sendMessage(
+          {
+            action: "completeBiometricReauth",
+            keyId,
+            reopenPopup: !isDetachedPopupWindow(),
+            reopenView: "SetPasswordPage",
+          },
+          (response?: { ok?: boolean }) => {
+            if (chrome.runtime.lastError || response?.ok !== true) {
+              resolve(false);
+              return;
+            }
+            resolve(true);
+          }
+        );
+      });
+    },
+    async removePassphrase() {
+      if (
+        this.defaultEncryption &&
+        !this.biometricVerified &&
+        !this.currentPhrase &&
+        this.biometricEnabled
+      ) {
+        if (!(await this.verifyCurrentPasswordWithBiometrics())) {
           return;
         }
       }
 
-      await this.$store.dispatch("accounts/changePassphrase", "");
-      this.$store.commit("notification/alert", this.i18n.updateSuccess);
-      this.$store.commit("style/hideInfo");
+      this.$store.commit("currentView/changeView", "LoadingPage");
+
+      try {
+        if (this.defaultEncryption && !this.biometricVerified) {
+          const isCorrectPassword = await verifyPasswordUsingKeyID(
+            this.defaultEncryption,
+            this.currentPhrase
+          );
+          if (!isCorrectPassword) {
+            this.$store.commit("notification/alert", this.i18n.phrase_wrong);
+            this.$store.commit("currentView/changeView", "SetPasswordPage");
+            return;
+          }
+        }
+
+        await this.$store.dispatch("accounts/changePassphrase", "");
+        await clearBiometricReauth();
+        this.biometricVerified = false;
+        this.$store.commit("notification/alert", this.i18n.updateSuccess);
+        this.$store.commit("style/hideInfo");
+      } catch (error) {
+        console.error("Failed to remove passphrase:", error);
+        this.$store.commit(
+          "notification/alert",
+          this.i18n.updateFailure || "Update failed."
+        );
+        this.$store.commit("currentView/changeView", "SetPasswordPage");
+      }
       return;
     },
     async changePassphrase() {
@@ -397,23 +506,45 @@ export default Vue.extend({
         return;
       }
 
-      this.$store.commit("currentView/changeView", "LoadingPage");
-
-      if (this.defaultEncryption) {
-        const isCorrectPassword = await verifyPasswordUsingKeyID(
-          this.defaultEncryption,
-          this.currentPhrase
-        );
-        if (!isCorrectPassword) {
-          this.$store.commit("notification/alert", this.i18n.phrase_wrong);
-          this.$store.commit("currentView/changeView", "SetPasswordPage");
+      if (
+        this.defaultEncryption &&
+        !this.biometricVerified &&
+        !this.currentPhrase &&
+        this.biometricEnabled
+      ) {
+        if (!(await this.verifyCurrentPasswordWithBiometrics())) {
           return;
         }
       }
 
-      await this.$store.dispatch("accounts/changePassphrase", this.phrase);
-      this.$store.commit("notification/alert", this.i18n.updateSuccess);
-      this.$store.commit("style/hideInfo");
+      this.$store.commit("currentView/changeView", "LoadingPage");
+
+      try {
+        if (this.defaultEncryption && !this.biometricVerified) {
+          const isCorrectPassword = await verifyPasswordUsingKeyID(
+            this.defaultEncryption,
+            this.currentPhrase
+          );
+          if (!isCorrectPassword) {
+            this.$store.commit("notification/alert", this.i18n.phrase_wrong);
+            this.$store.commit("currentView/changeView", "SetPasswordPage");
+            return;
+          }
+        }
+
+        await this.$store.dispatch("accounts/changePassphrase", this.phrase);
+        await clearBiometricReauth();
+        this.biometricVerified = false;
+        this.$store.commit("notification/alert", this.i18n.updateSuccess);
+        this.$store.commit("style/hideInfo");
+      } catch (error) {
+        console.error("Failed to change passphrase:", error);
+        this.$store.commit(
+          "notification/alert",
+          this.i18n.updateFailure || "Update failed."
+        );
+        this.$store.commit("currentView/changeView", "SetPasswordPage");
+      }
       return;
     },
 
@@ -427,32 +558,42 @@ export default Vue.extend({
           this.$store.state.accounts.encryption,
           this.$store.state.accounts.defaultEncryption
         );
-        ticket = await stageBiometricBundleForCreation(bundle);
         chrome.runtime.sendMessage({ action: "lock" }, (lockResponse) => {
           if (chrome.runtime.lastError || !lockResponse?.ok) {
-            void cancelBiometricBundleSetup(ticket);
             this.biometricError = `${this.i18n.biometric_setup_failed} (${
               lockResponse?.error || "lock failed"
             })`;
             this.biometricBusy = false;
             return;
           }
-          const setupUrl = chrome.runtime.getURL(
-            `view/biometric.html?ticket=${encodeURIComponent(ticket)}`
-          );
-          openBiometricWindow(setupUrl, {
-            onClosed: () => {
-              this.biometricBusy = false;
-              void isBiometricUnlockEnabled().then((enabled) => {
-                this.biometricEnabled = enabled;
+          void stageBiometricBundleForCreation(bundle)
+            .then((stagedTicket) => {
+              ticket = stagedTicket;
+              const setupUrl = chrome.runtime.getURL(
+                `view/biometric.html?ticket=${encodeURIComponent(ticket)}`
+              );
+              openBiometricWindow(setupUrl, {
+                onClosed: () => {
+                  this.biometricBusy = false;
+                  void isBiometricUnlockEnabled().then((enabled) => {
+                    this.biometricEnabled = enabled;
+                  });
+                },
+                onError: () => {
+                  void cancelBiometricBundleSetup(ticket);
+                  this.biometricError = this.i18n.biometric_setup_failed;
+                  this.biometricBusy = false;
+                },
               });
-            },
-            onError: () => {
-              void cancelBiometricBundleSetup(ticket);
-              this.biometricError = this.i18n.biometric_setup_failed;
+            })
+            .catch((stageError) => {
+              const reason =
+                stageError instanceof Error
+                  ? `${stageError.name}: ${stageError.message}`
+                  : String(stageError);
+              this.biometricError = `${this.i18n.biometric_setup_failed} (${reason})`;
               this.biometricBusy = false;
-            },
-          });
+            });
         });
       } catch (error) {
         if (ticket) await cancelBiometricBundleSetup(ticket);
@@ -470,6 +611,7 @@ export default Vue.extend({
       try {
         await removeBiometricUnlock();
         this.biometricEnabled = false;
+        this.biometricVerified = false;
       } catch {
         this.biometricError = this.i18n.biometric_setup_failed;
       } finally {

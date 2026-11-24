@@ -13,14 +13,17 @@
     </div>
 
     <div class="unlock-form">
-      <input
+      <a-password-input
         ref="password"
-        class="subpage-text-input unlock-input"
-        type="password"
+        input-class="subpage-text-input unlock-input"
         v-model="password"
         autocomplete="current-password"
         :placeholder="i18n.ui_master_password"
         :aria-label="i18n.ui_master_password"
+        :biometric="biometricEnabled"
+        :biometric-disabled="biometricBusy"
+        :biometric-title="i18n.biometric_unlock_button"
+        @biometric="unlockWithBiometrics"
         @keyup.enter="applyPassphrase"
       />
       <button
@@ -29,15 +32,6 @@
         @click="applyPassphrase"
       >
         {{ i18n.ok }}
-      </button>
-      <button
-        v-if="biometricEnabled"
-        type="button"
-        class="unlock-link"
-        :disabled="biometricBusy"
-        @click="unlockWithBiometrics"
-      >
-        {{ i18n.biometric_unlock_button }}
       </button>
       <div class="unlock-message" v-show="wrongPassword">
         {{ i18n.phrase_not_match }}
@@ -60,6 +54,7 @@ import {
   cacheBiometricUnlockBundle,
   clearAutoBiometricPromptSkip,
   isAutoBiometricPromptSkipped,
+  isDetachedPopupWindow,
   readBiometricUnlockRecord,
   skipAutoBiometricPrompt,
   unlockWithBiometricRecord,
@@ -82,11 +77,16 @@ export default Vue.extend({
       biometricError: "",
       biometricEnabled: false,
       unlockRecord: null as WebAuthnUnlockRecord | null,
+      autoBiometricTimer: null as number | null,
+      isDestroyed: false,
     };
   },
   async created() {
     try {
       this.unlockRecord = await readBiometricUnlockRecord();
+      if (this.isDestroyed) {
+        return;
+      }
       this.biometricEnabled = true;
     } catch {
       this.biometricEnabled = false;
@@ -98,14 +98,28 @@ export default Vue.extend({
     if (await isAutoBiometricPromptSkipped()) {
       return;
     }
+    if (this.isDestroyed) {
+      return;
+    }
     // Let the popup paint before the device prompt takes over.
-    window.setTimeout(() => {
+    this.autoBiometricTimer = window.setTimeout(() => {
+      this.autoBiometricTimer = null;
+      if (this.isDestroyed) {
+        return;
+      }
       void this.unlockInline();
     }, 120);
   },
+  beforeDestroy() {
+    this.isDestroyed = true;
+    if (this.autoBiometricTimer !== null) {
+      window.clearTimeout(this.autoBiometricTimer);
+      this.autoBiometricTimer = null;
+    }
+  },
   mounted() {
-    const input = this.$refs.password as HTMLInputElement | undefined;
-    input?.focus();
+    const input = this.$refs.password as { focus?: () => void } | undefined;
+    input?.focus?.();
   },
   computed: {
     wrongPassword() {
@@ -139,10 +153,31 @@ export default Vue.extend({
     async performUnlock(): Promise<BiometricUnlockBundle> {
       const record = this.unlockRecord || (await readBiometricUnlockRecord());
       const bundle = await unlockWithBiometricRecord(record);
-      await cacheBiometricUnlockBundle(bundle);
-      await this.resetAutolock();
+      const completedInBackground = await this.completeBiometricUnlock(bundle);
+      if (!completedInBackground) {
+        await cacheBiometricUnlockBundle(bundle);
+        await this.resetAutolock();
+      }
       this.unlockRecord = null;
       return bundle;
+    },
+    completeBiometricUnlock(bundle: BiometricUnlockBundle): Promise<boolean> {
+      return new Promise<boolean>((resolve) => {
+        chrome.runtime.sendMessage(
+          {
+            action: "completeBiometricUnlock",
+            bundle,
+            reopenPopup: !isDetachedPopupWindow(),
+          },
+          (response?: { ok?: boolean }) => {
+            if (chrome.runtime.lastError || response?.ok !== true) {
+              resolve(false);
+              return;
+            }
+            resolve(true);
+          }
+        );
+      });
     },
     handleUnlockFailure(error: unknown, manual: boolean, elapsed: number) {
       // Info level on purpose: chrome://extensions lists warn/error entries as
@@ -206,14 +241,58 @@ export default Vue.extend({
           onClosed: () => {
             this.biometricBusy = false;
             void chrome.storage.session
-              .get("cachedPassphrase")
-              .then(({ cachedPassphrase }) => {
-                if (!cachedPassphrase) {
+              .get([
+                "cachedPassphrase",
+                "cachedKeyId",
+                "cachedBiometricKeys",
+                "cachedBiometricDefaultKeyId",
+              ])
+              .then(async (session) => {
+                if (this.isDestroyed) {
                   return;
                 }
+                const keys: Array<{ id: string; secret: string }> = [];
+                if (Array.isArray(session.cachedBiometricKeys)) {
+                  for (const item of session.cachedBiometricKeys) {
+                    if (
+                      item &&
+                      typeof item === "object" &&
+                      typeof item.id === "string" &&
+                      typeof item.secret === "string"
+                    ) {
+                      keys.push({ id: item.id, secret: item.secret });
+                    }
+                  }
+                }
+                if (
+                  !keys.length &&
+                  typeof session.cachedPassphrase === "string" &&
+                  session.cachedPassphrase &&
+                  typeof session.cachedKeyId === "string" &&
+                  session.cachedKeyId
+                ) {
+                  keys.push({
+                    id: session.cachedKeyId,
+                    secret: session.cachedPassphrase,
+                  });
+                }
+                if (!keys.length) {
+                  return;
+                }
+                const defaultKeyId =
+                  (typeof session.cachedBiometricDefaultKeyId === "string" &&
+                    session.cachedBiometricDefaultKeyId) ||
+                  (typeof session.cachedKeyId === "string" &&
+                    session.cachedKeyId) ||
+                  keys[0].id;
                 this.biometricEnabled = false;
                 this.$store.commit("currentView/changeView", "LoadingPage");
-                void this.$store.dispatch("accounts/updateEntries");
+                this.$store.commit("accounts/applyCachedKeys", {
+                  keys,
+                  defaultKeyId,
+                });
+                await this.$store.dispatch("accounts/updateEntries");
+                this.$store.commit("style/hideInfo", true);
               });
           },
           onError: () => {
