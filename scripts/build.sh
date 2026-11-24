@@ -18,8 +18,16 @@ if [[ $PLATFORM != "chrome" ]] && [[ $PLATFORM != "firefox" ]] && [[ $PLATFORM !
 fi
 
 echo "Removing old build files..."
-rm -rf build dist
-rm -rf firefox chrome edge release test
+# KEEP_BUILD=1 keeps the previous package folders (useful when the environment
+# forbids bulk deletion, e.g. sandboxed CI or an agent running the tests).
+if [[ -z "${KEEP_BUILD:-}" ]]; then
+    rm -rf build dist
+    rm -f css/*.map
+    rm -rf firefox chrome edge release test
+else
+    echo "KEEP_BUILD set: reusing existing build folders."
+    rm -rf build dist
+fi
 echo "Checking style..."
 npm run format:check --silent
 
@@ -48,12 +56,17 @@ if [[ $PLATFORM = "prod" ]]; then
     ./node_modules/webpack-cli/bin/cli.js --config webpack.prod.js
 elif [[ $PLATFORM = "test" ]]; then
     ./node_modules/webpack-cli/bin/cli.js --config webpack.dev.js
-    ./node_modules/.bin/tsc --target ES2015 --esModuleInterop --moduleResolution nodenext --module commonjs scripts/test-runner.ts
+    ./node_modules/.bin/tsc --target ES2015 --esModuleInterop --moduleResolution node --module commonjs scripts/test-runner.ts
 else
     ./node_modules/webpack-cli/bin/cli.js
 fi
-./node_modules/sass/sass.js sass:css
-./node_modules/sass/sass.js sass/biometric.scss:css/biometric.css
+if [[ $PLATFORM = "prod" ]]; then
+    ./node_modules/sass/sass.js --style=compressed --no-source-map sass:css
+    ./node_modules/sass/sass.js --style=compressed --no-source-map sass/biometric.scss:css/biometric.css
+else
+    ./node_modules/sass/sass.js sass:css
+    ./node_modules/sass/sass.js sass/biometric.scss:css/biometric.css
+fi
 cp ./sass/DroidSansMono.woff2 ./sass/mocha.css ./css/
 
 AUTHENTICATOR_VERSION=$(node -p "require('./package.json').version")
@@ -92,7 +105,7 @@ else
 fi
 
 postCompile () {
-    mkdir $1
+    mkdir -p $1
     cp -r dist css images _locales LICENSE view $1
 
     if [[ $PLATFORM == "test" ]]; then
@@ -117,8 +130,10 @@ if [[ $PLATFORM = "prod" ]]; then
 elif [[ $PLATFORM = "test" ]]; then
     postCompile "chrome"
     postCompile "firefox"
-    mkdir test
-    mv chrome firefox test
+    mkdir -p test
+    # Copy rather than move: a re-run with KEEP_BUILD cannot move into the
+    # folders left by the previous run without deleting them first.
+    cp -R chrome firefox test/
 else
     postCompile $PLATFORM
 fi
