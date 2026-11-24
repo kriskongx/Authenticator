@@ -1,6 +1,6 @@
 <template>
   <div class="header">
-    <div class="header-actions header-actions-left" v-show="!isPopup()">
+    <div class="header-actions header-actions-left">
       <button
         type="button"
         class="icon header-icon"
@@ -48,7 +48,7 @@
       {{ style.isSelecting ? i18n.ui_batch_edit : i18n.extName }}
     </span>
 
-    <div class="header-actions header-actions-right" v-show="!isPopup()">
+    <div class="header-actions header-actions-right">
       <button
         type="button"
         class="icon header-icon"
@@ -132,6 +132,9 @@ export default Vue.extend({
       return params.get("popup");
     },
     popOut() {
+      if (this.isPopup()) {
+        return;
+      }
       let windowType;
       if (isFirefox) {
         windowType = "detached_panel";
@@ -164,6 +167,10 @@ export default Vue.extend({
     showBackup() {
       this.$store.commit("style/showBackupPanel", "BackupPage");
     },
+    toggleSelect() {
+      this.$store.commit("style/toggleSelect");
+      this.$store.commit("accounts/stopFilter");
+    },
     lock() {
       chrome.runtime.sendMessage({ action: "lock" }, window.close);
       return;
@@ -186,14 +193,31 @@ export default Vue.extend({
       const tab = await getCurrentTab();
       // Insert content script
       if (okToInjectContentScript(tab)) {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ["/dist/content.js"],
-        });
-        await chrome.scripting.insertCSS({
-          target: { tabId: tab.id },
-          files: ["/css/content.css"],
-        });
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ["/dist/content.js"],
+          });
+          await chrome.scripting.insertCSS({
+            target: { tabId: tab.id },
+            files: ["/css/content.css"],
+          });
+        } catch (error) {
+          console.warn("Failed to inject capture script:", error);
+          if (tab.url?.startsWith("file:")) {
+            if (
+              await this.$store.dispatch(
+                "notification/confirm",
+                this.i18n.capture_local_file_failed
+              )
+            ) {
+              window.open("import.html?QrImport", "_blank");
+            }
+            return;
+          }
+          this.$store.commit("notification/alert", this.i18n.capture_failed);
+          return;
+        }
 
         if (tab.url?.startsWith("file:")) {
           if (
@@ -223,7 +247,14 @@ export default Vue.extend({
           if (result !== "beginCapture") {
             this.$store.commit("notification/alert", this.i18n.capture_failed);
           } else {
-            window.close();
+            if (this.isPopup() && tab.windowId !== undefined) {
+              chrome.windows.update(tab.windowId, { focused: true }, () => {
+                void chrome.runtime.lastError;
+                window.close();
+              });
+            } else {
+              window.close();
+            }
           }
         });
       }

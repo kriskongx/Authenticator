@@ -1,4 +1,8 @@
 export class Style implements Module {
+  private infoFadeTimer?: ReturnType<typeof setTimeout>;
+  private notificationFadeTimer?: ReturnType<typeof setTimeout>;
+  private notificationClearTimer?: ReturnType<typeof setTimeout>;
+
   getModule() {
     return {
       state: {
@@ -51,24 +55,36 @@ export class Style implements Module {
             state.style.backupSlideout = false;
           }, 200);
         },
-        showInfo(state: StyleState, noAnimate?: boolean) {
+        showInfo: (state: StyleState, noAnimate?: boolean) => {
+          if (this.infoFadeTimer !== undefined) {
+            clearTimeout(this.infoFadeTimer);
+            this.infoFadeTimer = undefined;
+          }
+          state.style.fadeout = false;
           if (noAnimate) {
             state.style.show = true;
+            state.style.fadein = false;
           } else {
             state.style.fadein = true;
-            state.style.fadeout = false;
+            state.style.show = false;
           }
         },
-        hideInfo(state: StyleState, noAnimate?: boolean) {
-          if (noAnimate) {
-            state.style.show = false;
-          } else {
-            state.style.fadein = false;
-            state.style.fadeout = true;
+        hideInfo: (state: StyleState, noAnimate?: boolean) => {
+          if (this.infoFadeTimer !== undefined) {
+            clearTimeout(this.infoFadeTimer);
+            this.infoFadeTimer = undefined;
           }
-          setTimeout(() => {
+          state.style.show = false;
+          state.style.fadein = false;
+          if (noAnimate) {
             state.style.fadeout = false;
-          }, 200);
+          } else {
+            state.style.fadeout = true;
+            this.infoFadeTimer = setTimeout(() => {
+              this.infoFadeTimer = undefined;
+              state.style.fadeout = false;
+            }, 200);
+          }
         },
         showQr(state: StyleState) {
           state.style.qrfadein = true;
@@ -81,13 +97,21 @@ export class Style implements Module {
             state.style.qrfadeout = false;
           }, 200);
         },
-        showNotification(state: StyleState) {
+        showNotification: (state: StyleState) => {
+          if (this.notificationFadeTimer !== undefined) {
+            clearTimeout(this.notificationFadeTimer);
+          }
+          if (this.notificationClearTimer !== undefined) {
+            clearTimeout(this.notificationClearTimer);
+          }
           state.style.notificationFadein = true;
           state.style.notificationFadeout = false;
-          setTimeout(() => {
+          this.notificationFadeTimer = setTimeout(() => {
+            this.notificationFadeTimer = undefined;
             state.style.notificationFadein = false;
             state.style.notificationFadeout = true;
-            setTimeout(() => {
+            this.notificationClearTimer = setTimeout(() => {
+              this.notificationClearTimer = undefined;
               state.style.notificationFadeout = false;
             }, 200);
           }, 1000);

@@ -1,15 +1,18 @@
 export async function getSiteName() {
   const tab = await getCurrentTab();
-  const query = new URLSearchParams(document.location.search.substring(1));
+  const query =
+    typeof document !== "undefined" && document.location
+      ? new URLSearchParams(document.location.search.substring(1))
+      : null;
 
   let title: string | null;
   let url: string | null;
-  const titleFromQuery = query.get("title");
-  const urlFromQuery = query.get("url");
+  const titleFromQuery = query?.get("title");
+  const urlFromQuery = query?.get("url");
 
   if (titleFromQuery && urlFromQuery) {
-    title = decodeURIComponent(titleFromQuery);
-    url = decodeURIComponent(urlFromQuery);
+    title = titleFromQuery.replace(/[^a-z0-9]/gi, "").toLowerCase();
+    url = urlFromQuery;
   } else {
     if (!tab) {
       return [null, null];
@@ -23,8 +26,12 @@ export async function getSiteName() {
     return [title, null];
   }
 
-  const urlParser = new URL(url);
-  const hostname = urlParser.hostname; // it's always lower case
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname; // it's always lower case
+  } catch {
+    return [title, null];
+  }
 
   // try to parse name from hostname
   // i.e. hostname is www.example.com
@@ -34,32 +41,27 @@ export async function getSiteName() {
   // ip address
   if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
     nameFromDomain = hostname;
-  }
-
-  // local network
-  if (hostname.indexOf(".") === -1) {
+  } else if (hostname.indexOf(".") === -1) {
+    // local network
     nameFromDomain = hostname;
-  }
+  } else {
+    const hostLevelUnits = hostname.split(".");
 
-  const hostLevelUnits = hostname.split(".");
-
-  if (hostLevelUnits.length === 2) {
-    nameFromDomain = hostLevelUnits[0];
-  }
-
-  // www.example.com
-  // example.com.cn
-  if (hostLevelUnits.length > 2) {
-    // example.com.cn
-    if (
-      ["com", "net", "org", "edu", "gov", "co"].indexOf(
-        hostLevelUnits[hostLevelUnits.length - 2]
-      ) !== -1
-    ) {
-      nameFromDomain = hostLevelUnits[hostLevelUnits.length - 3];
-    } else {
+    if (hostLevelUnits.length === 2) {
+      nameFromDomain = hostLevelUnits[0];
+    } else if (hostLevelUnits.length > 2) {
       // www.example.com
-      nameFromDomain = hostLevelUnits[hostLevelUnits.length - 2];
+      // example.com.cn
+      if (
+        ["com", "net", "org", "edu", "gov", "co"].indexOf(
+          hostLevelUnits[hostLevelUnits.length - 2]
+        ) !== -1
+      ) {
+        nameFromDomain = hostLevelUnits[hostLevelUnits.length - 3];
+      } else {
+        // www.example.com
+        nameFromDomain = hostLevelUnits[hostLevelUnits.length - 2];
+      }
     }
   }
 
@@ -138,7 +140,31 @@ function isMatchedEntry(
 
 export async function getCurrentTab() {
   const currentWindow = await chrome.windows.getCurrent();
-  const queryOptions = { active: true, windowId: currentWindow.id };
+  let targetWindowId = currentWindow?.id;
+  if (
+    currentWindow &&
+    (currentWindow.type as string) !== "normal" &&
+    typeof chrome.windows.getLastFocused === "function"
+  ) {
+    const normalWindow = await new Promise<chrome.windows.Window | null>(
+      (resolve) => {
+        chrome.windows.getLastFocused({ windowTypes: ["normal"] }, (win) => {
+          if (chrome.runtime.lastError || !win) {
+            resolve(null);
+            return;
+          }
+          resolve(win);
+        });
+      }
+    );
+    if (normalWindow?.id !== undefined) {
+      targetWindowId = normalWindow.id;
+    }
+  }
+  const queryOptions =
+    targetWindowId !== undefined
+      ? { active: true, windowId: targetWindowId }
+      : { active: true, lastFocusedWindow: true };
   // `tab` will either be a `tabs.Tab` instance or `undefined`.
   const [tab] = await chrome.tabs.query(queryOptions);
   return tab;
@@ -150,13 +176,14 @@ interface TabWithIdAndURL extends chrome.tabs.Tab {
 }
 
 export function okToInjectContentScript(
-  tab: chrome.tabs.Tab
+  tab?: chrome.tabs.Tab
 ): tab is TabWithIdAndURL {
-  return (
-    tab.id !== undefined &&
-    tab.url !== undefined &&
-    (tab.url.startsWith("https://") ||
-      tab.url.startsWith("http://") ||
-      tab.url.startsWith("file://"))
+  return Boolean(
+    tab &&
+      tab.id !== undefined &&
+      tab.url !== undefined &&
+      (tab.url.startsWith("https://") ||
+        tab.url.startsWith("http://") ||
+        tab.url.startsWith("file://"))
   );
 }

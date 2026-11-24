@@ -1,7 +1,24 @@
 import { ActionContext } from "vuex";
 
+type PendingConfirm = {
+  message: string;
+  resolve: (value: boolean) => void;
+};
+
 export class Notification implements Module {
+  private activeConfirm: PendingConfirm | null = null;
+  private confirmQueue: PendingConfirm[] = [];
+
   getModule() {
+    const showNextConfirm = (state: NotificationState) => {
+      if (this.activeConfirm || !this.confirmQueue.length) {
+        return;
+      }
+      const next = this.confirmQueue.shift() || null;
+      this.activeConfirm = next;
+      state.confirmMessage = next ? next.message : "";
+    };
+
     return {
       state: {
         message: [], // Message content for alert with ok button
@@ -23,30 +40,27 @@ export class Notification implements Module {
         setConfirm: (state: NotificationState, message: string) => {
           state.confirmMessage = message;
         },
+        resolveConfirm: (state: NotificationState, accepted: boolean) => {
+          const current = this.activeConfirm;
+          this.activeConfirm = null;
+          state.confirmMessage = "";
+          if (current) {
+            current.resolve(Boolean(accepted));
+          }
+          showNextConfirm(state);
+        },
         setNotification: (state: NotificationState, message: string) => {
           state.notification = message;
         },
       },
       actions: {
         confirm: async (
-          state: ActionContext<NotificationState, object>,
+          context: ActionContext<NotificationState, object>,
           message: string
         ) => {
-          return new Promise((resolve: (value: boolean) => void) => {
-            state.commit("setConfirm", message);
-            window.addEventListener(
-              "confirm",
-              (event) => {
-                state.commit("setConfirm", "");
-                if (!this.isCustomEvent(event)) {
-                  resolve(false);
-                  return;
-                }
-                resolve(event.detail);
-                return;
-              },
-              { once: true }
-            );
+          return new Promise<boolean>((resolve) => {
+            this.confirmQueue.push({ message, resolve });
+            showNextConfirm(context.state);
           });
         },
         ephermalMessage: (
@@ -59,9 +73,5 @@ export class Notification implements Module {
       },
       namespaced: true,
     };
-  }
-
-  private isCustomEvent(event: Event): event is CustomEvent {
-    return "detail" in event;
   }
 }

@@ -217,11 +217,25 @@ export default Vue.extend({
       return this.$store.state.groups.groups;
     },
     activeGroupId(): string {
-      return this.$store.state.groups.activeGroupId || "__all__";
+      const current = this.$store.state.groups.activeGroupId || "__all__";
+      if (
+        current !== "__all__" &&
+        current !== "__ungrouped__" &&
+        !this.validGroupIds.has(current)
+      ) {
+        return "__all__";
+      }
+      return current;
+    },
+    validGroupIds(): Set<string> {
+      return new Set(this.groups.map((group) => group.id));
     },
     groupCounts(): Record<string, number> {
       return this.entries.reduce((counts: Record<string, number>, entry) => {
-        const groupId = entry.groupId || "__ungrouped__";
+        const groupId =
+          entry.groupId && this.validGroupIds.has(entry.groupId)
+            ? entry.groupId
+            : "__ungrouped__";
         counts[groupId] = (counts[groupId] || 0) + 1;
         return counts;
       }, {});
@@ -266,7 +280,7 @@ export default Vue.extend({
         }
 
         if (this.activeGroupId === "__ungrouped__") {
-          return !entry.groupId;
+          return !entry.groupId || !this.validGroupIds.has(entry.groupId);
         }
 
         return entry.groupId === this.activeGroupId;
@@ -338,6 +352,11 @@ export default Vue.extend({
         )
       );
     },
+    groups() {
+      if (this.targetGroupId && !this.validGroupIds.has(this.targetGroupId)) {
+        this.targetGroupId = "";
+      }
+    },
   },
   methods: {
     // Quick WebDAV actions live on the first screen: one click to back up,
@@ -364,6 +383,14 @@ export default Vue.extend({
             this.i18n.webdav_settings_missing
           );
           this.$store.commit("style/showBackupPanel", "WebDAVPage");
+          return;
+        }
+        if (result === "needsPassword") {
+          this.$store.commit(
+            "notification/alert",
+            this.i18n.backup_set_password_alert ||
+              this.i18n.ui_create_password_first
+          );
           return;
         }
         if (result === "denied") {
@@ -450,11 +477,23 @@ export default Vue.extend({
         return;
       }
 
-      await this.$store.dispatch("accounts/assignGroupBatch", {
-        hashes: Array.from(this.selectedHashes),
-        groupId: this.targetGroupId || undefined,
-      });
-      this.selectedHashes = new Set();
+      const targetGroupId =
+        this.targetGroupId && this.validGroupIds.has(this.targetGroupId)
+          ? this.targetGroupId
+          : undefined;
+      try {
+        await this.$store.dispatch("accounts/assignGroupBatch", {
+          hashes: Array.from(this.selectedHashes),
+          groupId: targetGroupId,
+        });
+        this.selectedHashes = new Set();
+      } catch (error) {
+        console.error("Failed to move entries to group:", error);
+        this.$store.commit(
+          "notification/alert",
+          this.i18n.updateFailure || "Update failed."
+        );
+      }
     },
     openSwipe(hash: string) {
       this.openSwipeHash = hash;
@@ -479,9 +518,18 @@ export default Vue.extend({
         )
       ) {
         const hashes = Array.from(this.selectedHashes);
-        await EntryStorage.removeMany(hashes);
-        await this.$store.dispatch("accounts/batchDeleteCode", hashes);
-        this.selectedHashes = new Set();
+        try {
+          await EntryStorage.removeMany(hashes);
+          await this.$store.dispatch("accounts/batchDeleteCode", hashes);
+          this.selectedHashes = new Set();
+        } catch (error) {
+          console.error("Failed to batch delete entries:", error);
+          await this.$store.dispatch("accounts/updateEntries");
+          this.$store.commit(
+            "notification/alert",
+            this.i18n.updateFailure || "Update failed."
+          );
+        }
       }
     },
     isEntryVisible(entry: OTPEntry) {

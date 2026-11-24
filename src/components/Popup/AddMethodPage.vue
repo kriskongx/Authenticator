@@ -130,14 +130,31 @@ export default Vue.extend({
       // Insert content script
       const tab = await getCurrentTab();
       if (okToInjectContentScript(tab)) {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ["/dist/content.js"],
-        });
-        await chrome.scripting.insertCSS({
-          target: { tabId: tab.id },
-          files: ["/css/content.css"],
-        });
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ["/dist/content.js"],
+          });
+          await chrome.scripting.insertCSS({
+            target: { tabId: tab.id },
+            files: ["/css/content.css"],
+          });
+        } catch (error) {
+          console.warn("Failed to inject capture script:", error);
+          if (tab.url?.startsWith("file:")) {
+            if (
+              await this.$store.dispatch(
+                "notification/confirm",
+                this.i18n.capture_local_file_failed
+              )
+            ) {
+              window.open("import.html?QrImport", "_blank");
+            }
+            return;
+          }
+          this.$store.commit("notification/alert", this.i18n.capture_failed);
+          return;
+        }
 
         chrome.runtime.sendMessage(
           { action: "updateContentTab", data: tab },
@@ -154,6 +171,11 @@ export default Vue.extend({
           }
           if (result !== "beginCapture") {
             this.$store.commit("notification/alert", this.i18n.capture_failed);
+          } else if (tab.windowId !== undefined) {
+            chrome.windows.update(tab.windowId, { focused: true }, () => {
+              void chrome.runtime.lastError;
+              window.close();
+            });
           } else {
             window.close();
           }

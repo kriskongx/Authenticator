@@ -133,6 +133,7 @@ export default Vue.extend({
       newGroupName: "",
       editingGroupId: "",
       editingName: "",
+      isRenaming: false,
     };
   },
   computed: {
@@ -173,35 +174,40 @@ export default Vue.extend({
       });
     },
     async commitRename(groupId: string) {
+      if (this.editingGroupId !== groupId || this.isRenaming) {
+        return;
+      }
       const currentGroup = this.groups.find((group) => group.id === groupId);
       if (!currentGroup) {
+        this.cancelRename();
         return;
       }
 
       const nextName = this.editingName.trim();
 
-      if (!nextName) {
-        this.editingGroupId = "";
-        this.editingName = "";
+      if (!nextName || nextName === currentGroup.name) {
+        this.cancelRename();
         return;
       }
 
-      if (nextName === currentGroup.name) {
-        this.editingGroupId = "";
-        this.editingName = "";
-        return;
+      this.isRenaming = true;
+      try {
+        const renamed = await this.$store.dispatch("groups/renameGroup", {
+          id: groupId,
+          name: nextName,
+        });
+        if (this.editingGroupId === groupId) {
+          this.cancelRename();
+        }
+        if (!renamed) {
+          this.$store.commit(
+            "notification/alert",
+            this.i18n.ui_group_duplicate
+          );
+        }
+      } finally {
+        this.isRenaming = false;
       }
-
-      const renamed = await this.$store.dispatch("groups/renameGroup", {
-        id: groupId,
-        name: nextName,
-      });
-      if (!renamed) {
-        this.$store.commit("notification/alert", this.i18n.ui_group_duplicate);
-        return;
-      }
-      this.editingGroupId = "";
-      this.editingName = "";
     },
     cancelRename() {
       this.editingGroupId = "";

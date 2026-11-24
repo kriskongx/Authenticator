@@ -214,7 +214,15 @@ export default Vue.extend({
       );
     },
     exportEntryCount(): number {
-      return Object.keys(this.exportData).length;
+      const records = Object.values(this.exportData) as Array<{
+        type?: string;
+      }>;
+      if (this.exportFormat === "json") {
+        return records.length;
+      }
+      return records.filter(
+        (record) => record?.type !== "steam" && record?.type !== "battle"
+      ).length;
     },
     encryptionOptionDescription(): string {
       if (this.exportFormat !== "json") {
@@ -290,6 +298,12 @@ export default Vue.extend({
         link.click();
         document.body.removeChild(link);
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (error) {
+        console.error("Failed to export backup:", error);
+        this.$store.commit(
+          "notification/alert",
+          this.i18n.updateFailure || "Update failed."
+        );
       } finally {
         this.isExporting = false;
       }

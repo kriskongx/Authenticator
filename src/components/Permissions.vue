@@ -147,6 +147,7 @@ export default Vue.extend({
         identity: this.i18n.ui_permission_name_identity,
         alarms: this.i18n.ui_permission_name_alarms,
         scripting: this.i18n.ui_permission_name_scripting,
+        nativeMessaging: this.i18n.ui_local_import_title || "Native Messaging",
         clipboardWrite: this.i18n.ui_permission_name_clipboard,
         contextMenus: this.i18n.ui_permission_name_context_menu,
         "https://www.google.com/*": this.i18n.ui_permission_name_clock,

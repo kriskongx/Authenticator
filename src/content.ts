@@ -5,7 +5,22 @@ import jsQR from "jsqr";
 // @ts-expect-error - injected by vue-svg-loader
 import scanGIF from "../images/scan.gif";
 
-if (!document.getElementById("__ga_grayLayout__")) {
+// First line of defence: per-frame guard so a second injection into the same
+// frame cannot register duplicate listeners. Cross-frame injection is decided
+// earlier by okToInjectContentScript() in utils.ts.
+// First line of defence: per-frame guard so a second injection into the same
+// frame cannot register duplicate listeners. Cross-frame injection is decided
+// earlier by okToInjectContentScript() in utils.ts.
+const contentGlobal = globalThis as typeof globalThis & {
+  __authenticatorContentLoaded?: boolean;
+};
+
+let isDraggingCapture = false;
+let captureStartX = 0;
+let captureStartY = 0;
+
+if (!contentGlobal.__authenticatorContentLoaded) {
+  contentGlobal.__authenticatorContentLoaded = true;
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.action) {
       case "capture":
@@ -46,6 +61,7 @@ if (!document.getElementById("__ga_grayLayout__")) {
         pasteCode(message.code);
         break;
       case "stopCapture": {
+        isDraggingCapture = false;
         const captureBox = document.getElementById("__ga_captureBox__");
         if (captureBox) {
           captureBox.style.display = "none";
@@ -64,19 +80,28 @@ if (!document.getElementById("__ga_grayLayout__")) {
 
     return false;
   });
-}
 
-sessionStorage.setItem("captureBoxPositionLeft", "0");
-sessionStorage.setItem("captureBoxPositionTop", "0");
+  window.addEventListener("keydown", (event: KeyboardEvent) => {
+    if (event.key !== "Escape") {
+      return;
+    }
+    const grayLayout = document.getElementById("__ga_grayLayout__");
+    if (!grayLayout || grayLayout.style.display === "none") {
+      return;
+    }
+    event.preventDefault();
+    isDraggingCapture = false;
+    grayLayout.style.display = "none";
+    const captureBox = document.getElementById("__ga_captureBox__");
+    if (captureBox) {
+      captureBox.style.display = "none";
+    }
+  });
+}
 
 function showGrayLayout() {
   let grayLayout = document.getElementById("__ga_grayLayout__");
-  let qrCanvas = document.getElementById("__ga_qrCanvas__");
   if (!grayLayout) {
-    qrCanvas = document.createElement("canvas");
-    qrCanvas.id = "__ga_qrCanvas__";
-    qrCanvas.style.display = "none";
-    document.body.appendChild(qrCanvas);
     grayLayout = document.createElement("div");
     grayLayout.id = "__ga_grayLayout__";
     document.body.appendChild(grayLayout);
@@ -98,6 +123,7 @@ function showGrayLayout() {
       return;
     };
   }
+  isDraggingCapture = false;
   grayLayout.style.display = "block";
 }
 
@@ -111,8 +137,9 @@ function grayLayoutDown(event: MouseEvent) {
     return;
   }
 
-  sessionStorage.setItem("captureBoxPositionLeft", event.clientX.toString());
-  sessionStorage.setItem("captureBoxPositionTop", event.clientY.toString());
+  isDraggingCapture = true;
+  captureStartX = event.clientX;
+  captureStartY = event.clientY;
   captureBox.style.left = event.clientX + "px";
   captureBox.style.top = event.clientY + "px";
   captureBox.style.width = "1px";
@@ -127,6 +154,9 @@ function grayLayoutDown(event: MouseEvent) {
 }
 
 function grayLayoutMove(event: MouseEvent) {
+  if (!isDraggingCapture) {
+    return;
+  }
   if (event.button === 1 || event.button === 2) {
     event.preventDefault();
     return;
@@ -136,22 +166,16 @@ function grayLayoutMove(event: MouseEvent) {
     return;
   }
 
-  const captureBoxLeft = Math.min(
-    Number(sessionStorage.getItem("captureBoxPositionLeft")),
-    event.clientX
+  const captureBoxLeft = Math.min(captureStartX, event.clientX);
+  const captureBoxTop = Math.min(captureStartY, event.clientY);
+  const captureBoxWidth = Math.max(
+    0,
+    Math.abs(captureStartX - event.clientX) - 1
   );
-  const captureBoxTop = Math.min(
-    Number(sessionStorage.getItem("captureBoxPositionTop")),
-    event.clientY
+  const captureBoxHeight = Math.max(
+    0,
+    Math.abs(captureStartY - event.clientY) - 1
   );
-  const captureBoxWidth =
-    Math.abs(
-      Number(sessionStorage.getItem("captureBoxPositionLeft")) - event.clientX
-    ) - 1;
-  const captureBoxHeight =
-    Math.abs(
-      Number(sessionStorage.getItem("captureBoxPositionTop")) - event.clientY
-    ) - 1;
   captureBox.style.left = captureBoxLeft + "px";
   captureBox.style.top = captureBoxTop + "px";
   captureBox.style.width = captureBoxWidth + "px";
@@ -166,6 +190,9 @@ function grayLayoutUp(event: MouseEvent) {
     return;
   }
 
+  const wasDragging = isDraggingCapture;
+  isDraggingCapture = false;
+
   setTimeout(() => {
     captureBox.style.display = "none";
     grayLayout.style.display = "none";
@@ -176,24 +203,18 @@ function grayLayoutUp(event: MouseEvent) {
     return;
   }
 
-  const captureBoxLeft =
-    Math.min(
-      Number(sessionStorage.getItem("captureBoxPositionLeft")),
-      event.clientX
-    ) + 1;
-  const captureBoxTop =
-    Math.min(
-      Number(sessionStorage.getItem("captureBoxPositionTop")),
-      event.clientY
-    ) + 1;
-  const captureBoxWidth =
-    Math.abs(
-      Number(sessionStorage.getItem("captureBoxPositionLeft")) - event.clientX
-    ) - 1;
-  const captureBoxHeight =
-    Math.abs(
-      Number(sessionStorage.getItem("captureBoxPositionTop")) - event.clientY
-    ) - 1;
+  if (!wasDragging) {
+    return false;
+  }
+
+  const captureBoxLeft = Math.min(captureStartX, event.clientX) + 1;
+  const captureBoxTop = Math.min(captureStartY, event.clientY) + 1;
+  const captureBoxWidth = Math.abs(captureStartX - event.clientX) - 1;
+  const captureBoxHeight = Math.abs(captureStartY - event.clientY) - 1;
+
+  if (captureBoxWidth <= 0 || captureBoxHeight <= 0) {
+    return false;
+  }
 
   // make sure captureBox and grayLayout is hidden
   setTimeout(() => {
@@ -217,33 +238,42 @@ async function qrDecode(
   width: number,
   height: number
 ) {
-  const canvas = document.getElementById(
-    "__ga_qrCanvas__"
-  ) as HTMLCanvasElement;
+  if (width <= 0 || height <= 0 || !window.innerWidth) {
+    return;
+  }
   const qr = new Image();
   qr.onload = () => {
-    const devicePixelRatio = qr.width / window.innerWidth;
-    canvas.width = qr.width;
-    canvas.height = qr.height;
-    canvas.getContext("2d")?.drawImage(qr, 0, 0);
-    const imageData = canvas
-      .getContext("2d")
-      ?.getImageData(
-        left * devicePixelRatio,
-        top * devicePixelRatio,
-        width * devicePixelRatio,
-        height * devicePixelRatio
-      );
-    if (imageData) {
-      canvas.width = imageData.width;
-      canvas.height = imageData.height;
-      canvas.getContext("2d")?.putImageData(imageData, 0, 0);
+    // Keep decoding canvas detached from document.body so host page scripts
+    // can never read the viewport screenshot or secret QR code pixels.
+    const canvas = document.createElement("canvas");
+    try {
+      const devicePixelRatio = qr.width / window.innerWidth;
+      const sx = Math.max(0, Math.round(left * devicePixelRatio));
+      const sy = Math.max(0, Math.round(top * devicePixelRatio));
+      const sw = Math.round(width * devicePixelRatio);
+      const sh = Math.round(height * devicePixelRatio);
+      if (sw <= 0 || sh <= 0) {
+        return;
+      }
+      canvas.width = qr.width;
+      canvas.height = qr.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        return;
+      }
+      ctx.drawImage(qr, 0, 0);
+      const imageData = ctx.getImageData(sx, sy, sw, sh);
+      if (!imageData) {
+        return;
+      }
+      canvas.width = 0;
+      canvas.height = 0;
 
       const qrReader = new QRCode();
       qrReader.callback = (
         error: string,
-        text: {
-          result: string;
+        text?: {
+          result?: string;
           points: Array<{
             x: number;
             y: number;
@@ -253,8 +283,10 @@ async function qrDecode(
         }
       ) => {
         let qrRes = "";
-        if (error) {
-          console.error(error);
+        if (error || typeof text?.result !== "string") {
+          if (error) {
+            console.error(error);
+          }
           const jsQrCode = jsQR(
             imageData.data,
             imageData.width,
@@ -276,6 +308,9 @@ async function qrDecode(
         });
       };
       qrReader.decode(imageData);
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
     }
   };
   qr.src = url;
@@ -360,18 +395,3 @@ function fireInputEvents(inputBox: HTMLInputElement) {
   }
   return;
 }
-
-window.onkeydown = (event: KeyboardEvent) => {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    const grayLayout = document.getElementById("__ga_grayLayout__");
-    const captureBox = document.getElementById("__ga_captureBox__");
-
-    if (grayLayout) {
-      grayLayout.style.display = "none";
-    }
-    if (captureBox) {
-      captureBox.style.display = "none";
-    }
-  }
-};

@@ -6,6 +6,7 @@ import {
   cancelBiometricBundleSetup,
   clearAutoBiometricPromptSkip,
   hasStagedBiometricBundle,
+  isBiometricUnlockEnabled,
   readBiometricUnlockRecord,
   skipAutoBiometricPrompt,
   unlockWithBiometricRecord,
@@ -112,12 +113,22 @@ if (continueButton) {
     unlockMode ? "biometric_unlock_button" : "biometric_continue",
     unlockMode ? "Unlock with device" : "Continue"
   );
-  continueButton.disabled = unlockMode ? false : !ticket;
+  continueButton.disabled = unlockMode ? !unlockRecord : !ticket;
   continueButton.addEventListener("click", () => {
     if (unlockMode) {
       void unlock();
     } else {
       void enroll();
+    }
+  });
+}
+
+let enrollmentCompleted = false;
+
+if (!unlockMode && ticket) {
+  window.addEventListener("pagehide", () => {
+    if (!enrollmentCompleted) {
+      void cancelBiometricBundleSetup(ticket);
     }
   });
 }
@@ -144,19 +155,28 @@ async function enroll() {
     }
 
     await submitEnrollment(enrollment);
+    enrollmentCompleted = true;
     setStatus(text("biometric_setup_complete", "Device unlock is ready."));
     continueButton.textContent = text("biometric_setup_done", "Done");
     closeWindowAfterSuccess();
   } catch (error) {
-    log("setup failed", describeError(error));
-    await cancelBiometricBundleSetup(ticket);
+    const reason = describeError(error);
+    log("setup failed", reason);
+    const isRecoverableUserCancel =
+      error instanceof Error && error.name === "NotAllowedError";
+    if (!isRecoverableUserCancel) {
+      await cancelBiometricBundleSetup(ticket);
+    }
+    const stillStaged = isRecoverableUserCancel
+      ? await hasStagedBiometricBundle(ticket)
+      : false;
     setStatus(
       `${text(
         "biometric_setup_failed",
         "Device unlock could not be set up. Your master password still works."
-      )} (${describeError(error)})`
+      )} (${reason})`
     );
-    continueButton.disabled = false;
+    continueButton.disabled = !stillStaged;
   }
 }
 
@@ -174,7 +194,17 @@ async function submitEnrollment(enrollment: BiometricCredentialEnrollment) {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 400);
     });
-    return await sendRuntimeMessage(message);
+    try {
+      return await sendRuntimeMessage(message);
+    } catch (retryError) {
+      if (
+        describeError(retryError).includes("biometricSetupExpired") &&
+        (await isBiometricUnlockEnabled())
+      ) {
+        return { ok: true };
+      }
+      throw retryError;
+    }
   }
 }
 
@@ -188,12 +218,21 @@ async function unlock(auto = false) {
     if (!unlockRecord) throw new Error("biometricUnlockNotConfigured");
     const unlockPromise = unlockWithBiometricRecord(unlockRecord);
     const bundle = await unlockPromise;
-    await cacheBiometricUnlockBundle(bundle);
-    await clearAutoBiometricPromptSkip();
-    await sendRuntimeMessage({ action: "resetAutolock" });
+    try {
+      await sendRuntimeMessage({
+        action: "completeBiometricUnlock",
+        bundle,
+        reopenPopup: true,
+        reopenDelayMs: 220,
+      });
+    } catch {
+      await cacheBiometricUnlockBundle(bundle);
+      await clearAutoBiometricPromptSkip();
+      await sendRuntimeMessage({ action: "resetAutolock" });
+    }
     setStatus(text("biometric_unlock_complete", "Vault unlocked."));
     continueButton.textContent = text("biometric_setup_done", "Done");
-    closeWindowAfterSuccess();
+    window.setTimeout(() => window.close(), 120);
   } catch (error) {
     log("unlock failed", describeError(error));
     const notAllowed =

@@ -163,7 +163,11 @@
     </section>
 
     <div class="subpage-actions add-account-actions">
-      <button type="submit" class="subpage-button primary">
+      <button
+        type="submit"
+        class="subpage-button primary"
+        :disabled="isSubmitting"
+      >
         {{ i18n.ui_add_otp }}
       </button>
     </div>
@@ -199,6 +203,7 @@ export default Vue.extend({
       algorithm: OTPAlgorithm;
     };
     newGroupName: string;
+    isSubmitting: boolean;
   } {
     return {
       newAccount: {
@@ -213,6 +218,7 @@ export default Vue.extend({
         algorithm: OTPAlgorithm.SHA1,
       },
       newGroupName: "",
+      isSubmitting: false,
     };
   },
   computed: {
@@ -242,6 +248,9 @@ export default Vue.extend({
       return createdGroup?.id;
     },
     async addNewAccount() {
+      if (this.isSubmitting) {
+        return;
+      }
       const normalizedSecretData = normalizeOtpSecretForType(
         this.newAccount.secret,
         this.newAccount.type
@@ -252,51 +261,63 @@ export default Vue.extend({
         return;
       }
 
-      const { secret, type } = normalizedSecretData;
+      this.isSubmitting = true;
+      try {
+        const { secret, type } = normalizedSecretData;
 
-      if (type === OTPType.hhex || type === OTPType.hotp) {
-        this.newAccount.period = undefined;
-      } else if (
-        typeof this.newAccount.period !== "number" ||
-        this.newAccount.period < 1
-      ) {
-        this.newAccount.period = undefined;
-      }
+        if (type === OTPType.hhex || type === OTPType.hotp) {
+          this.newAccount.period = undefined;
+        } else if (
+          typeof this.newAccount.period !== "number" ||
+          this.newAccount.period < 1
+        ) {
+          this.newAccount.period = undefined;
+        }
 
-      const defaultEncryptionKey = this.$store.state.accounts.defaultEncryption;
-      const encryption = defaultEncryptionKey
-        ? this.$store.state.accounts.encryption.get(defaultEncryptionKey)
-        : undefined;
-      const groupId = await this.resolveGroupId();
+        const defaultEncryptionKey = this.$store.state.accounts
+          .defaultEncryption;
+        const encryption = defaultEncryptionKey
+          ? this.$store.state.accounts.encryption.get(defaultEncryptionKey)
+          : undefined;
+        const groupId = await this.resolveGroupId();
 
-      const entry = new OTPEntry(
-        {
-          type,
-          index: 0,
-          issuer: this.newAccount.issuer.trim(),
-          account: this.newAccount.account.trim(),
-          note: this.newAccount.note.trim(),
-          groupId,
-          encrypted: false,
-          secret,
-          counter: 0,
-          period: this.newAccount.period,
-          digits: this.newAccount.digits,
-          algorithm: this.newAccount.algorithm,
-        },
-        encryption
-      );
+        const entry = new OTPEntry(
+          {
+            type,
+            index: 0,
+            issuer: this.newAccount.issuer.trim(),
+            account: this.newAccount.account.trim(),
+            note: this.newAccount.note.trim(),
+            groupId,
+            encrypted: false,
+            secret,
+            counter: 0,
+            period: this.newAccount.period,
+            digits: this.newAccount.digits,
+            algorithm: this.newAccount.algorithm,
+          },
+          encryption
+        );
 
-      await entry.create();
-      await this.$store.dispatch("accounts/addCode", entry);
-      this.$store.commit("style/hideInfo");
+        await entry.create();
+        await this.$store.dispatch("accounts/addCode", entry);
+        this.$store.commit("style/hideInfo");
 
-      const codes = document.getElementById("codes");
-      if (codes) {
-        // wait vue apply changes to dom
-        setTimeout(() => {
-          codes.scrollTop = 0;
-        }, 0);
+        const codes = document.getElementById("codes");
+        if (codes) {
+          // wait vue apply changes to dom
+          setTimeout(() => {
+            codes.scrollTop = 0;
+          }, 0);
+        }
+      } catch (error) {
+        console.error("Failed to create account:", error);
+        this.$store.commit(
+          "notification/alert",
+          this.i18n.updateFailure || "Update failed."
+        );
+      } finally {
+        this.isSubmitting = false;
       }
       return;
     },

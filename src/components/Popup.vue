@@ -1,6 +1,7 @@
 <template>
   <div
     v-cloak
+    class="popup-shell"
     v-bind:class="{
       'theme-normal':
         theme !== 'accessibility' &&
@@ -44,6 +45,7 @@
     <CloudRestoreDialog />
 
     <PageHandler
+      v-if="style.fadein || style.fadeout || style.show"
       v-bind:class="{
         fadein: style.fadein,
         fadeout: style.fadeout,
@@ -87,6 +89,16 @@ import BackupNavigationPage from "./Popup/BackupNavigationPage.vue";
 import CloudRestoreDialog from "./Popup/CloudRestoreDialog.vue";
 import PageHandler from "./Popup/PageHandler.vue";
 import NotificationHandler from "./Popup/NotificationHandler.vue";
+import { EntryStorage } from "../models/storage";
+
+const THEME_CLASSES = [
+  "theme-normal",
+  "theme-accessibility",
+  "theme-dark",
+  "theme-simple",
+  "theme-compact",
+  "theme-flat",
+];
 
 const computedPrototype = [
   mapState("style", ["style"]),
@@ -108,6 +120,28 @@ export default Vue.extend({
     };
   },
   computed,
+  watch: {
+    theme: {
+      immediate: true,
+      handler(nextTheme: string) {
+        const activeClass =
+          nextTheme === "accessibility" ||
+          nextTheme === "dark" ||
+          nextTheme === "simple" ||
+          nextTheme === "compact" ||
+          nextTheme === "flat"
+            ? `theme-${nextTheme}`
+            : "theme-normal";
+        for (const el of [document.documentElement, document.body]) {
+          if (!el) {
+            continue;
+          }
+          el.classList.remove(...THEME_CLASSES);
+          el.classList.add(activeClass);
+        }
+      },
+    },
+  },
   created() {
     chrome.runtime.onMessage.addListener(this.onRuntimeMessage);
   },
@@ -119,12 +153,33 @@ export default Vue.extend({
     // while this popup is open; refresh in place instead of asking the user to
     // reopen it.
     onRuntimeMessage(message: { action?: string }): boolean {
+      if (message?.action === "stopImport") {
+        void this.handleVaultLocked();
+        return false;
+      }
       if (message?.action !== "entriesUpdated") {
         return false;
       }
       void this.$store.dispatch("accounts/updateEntries");
       void this.$store.dispatch("groups/refreshGroups");
       return false;
+    },
+    async handleVaultLocked() {
+      this.$store.commit("style/closeCloudRestore");
+      this.$store.commit("style/hideMenu");
+      this.$store.commit("style/hideBackupPanel");
+      this.$store.commit("style/hideQr");
+      await this.$store.dispatch("accounts/lockVault");
+      await this.$store.dispatch("groups/refreshGroups");
+      if (
+        (await EntryStorage.hasEncryptionKey()) ||
+        this.$store.getters["accounts/currentlyEncrypted"]
+      ) {
+        this.$store.commit("currentView/changeView", "EnterPasswordPage");
+        this.$store.commit("style/showInfo", true);
+      } else {
+        this.$store.commit("style/hideInfo", true);
+      }
     },
     hideQr() {
       this.$store.commit("style/hideQr");

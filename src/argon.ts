@@ -21,6 +21,10 @@ window.addEventListener("message", (event) => {
   };
 
   switch (message.action) {
+    case "ping":
+      reply({ response: "pong" });
+      break;
+
     case "hash":
       Argon.hash(message.value, message.salt)
         .then((hash) => {
@@ -42,6 +46,10 @@ window.addEventListener("message", (event) => {
   }
   return;
 });
+
+if (window.parent && window.parent !== window) {
+  window.parent.postMessage({ type: "argon-ready" }, "*");
+}
 
 class Argon {
   static async hash(value: string, salt: string | Uint8Array) {

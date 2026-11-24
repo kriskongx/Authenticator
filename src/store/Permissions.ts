@@ -28,6 +28,13 @@ const permissions: Permission[] = [
     revocable: false,
   },
   {
+    id: "nativeMessaging",
+    description:
+      chrome.i18n.getMessage("permission_native_messaging") ||
+      chrome.i18n.getMessage("ui_local_import_desc"),
+    revocable: false,
+  },
+  {
     id: "clipboardWrite",
     description: chrome.i18n.getMessage("permission_clipboard_write"),
     revocable: true,
@@ -224,38 +231,46 @@ export class Permissions implements Module {
 
   private async revokePermission(permissionId: string): Promise<void> {
     return new Promise((resolve: () => void) => {
+      let settled = false;
+      const done = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeoutId);
+        resolve();
+      };
+      const timeoutId = setTimeout(done, 5000);
+
       chrome.permissions.getAll(
         (permissions: chrome.permissions.Permissions) => {
+          if (chrome.runtime.lastError) {
+            done();
+            return;
+          }
           for (const _permissionId of permissions.permissions ?? []) {
             if (_permissionId === permissionId) {
-              return chrome.permissions.remove(
-                {
-                  permissions: [permissionId],
-                },
-                () => {
-                  resolve();
-                }
-              );
+              chrome.permissions.remove({ permissions: [permissionId] }, () => {
+                void chrome.runtime.lastError;
+                done();
+              });
+              return;
             }
           }
 
           for (const _permissionId of permissions.origins ?? []) {
             if (_permissionId === permissionId) {
-              return chrome.permissions.remove(
-                {
-                  origins: [permissionId],
-                },
-                () => {
-                  resolve();
-                }
-              );
+              chrome.permissions.remove({ origins: [permissionId] }, () => {
+                void chrome.runtime.lastError;
+                done();
+              });
+              return;
             }
           }
+
+          done();
         }
       );
-
-      // Timeout for remove permissions failed
-      setTimeout(resolve, 100);
     });
   }
 }

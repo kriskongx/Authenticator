@@ -27,31 +27,32 @@ export class Menu implements Module {
         ),
       },
       mutations: {
-        setZoom: (state: MenuState, zoom: number) => {
-          state.zoom = zoom;
-          UserSettings.items.zoom = zoom;
-          UserSettings.commitItems();
-          this.resize(zoom);
+        setZoom: (state: MenuState, zoom: number | string) => {
+          const numericZoom = Number(zoom) || 100;
+          state.zoom = numericZoom;
+          UserSettings.items.zoom = numericZoom;
+          void UserSettings.commitItems();
+          this.resize(numericZoom);
         },
         setAutofill(state: MenuState, useAutofill: boolean) {
           state.useAutofill = useAutofill;
           UserSettings.items.autofill = useAutofill;
-          UserSettings.commitItems();
+          void UserSettings.commitItems();
         },
         setSmartFilter(state: MenuState, smartFilter: boolean) {
           state.smartFilter = smartFilter;
           UserSettings.items.smartFilter = smartFilter;
-          UserSettings.commitItems();
+          void UserSettings.commitItems();
         },
         setEnableContextMenu(state: MenuState, enableContextMenu: boolean) {
           state.enableContextMenu = enableContextMenu;
           UserSettings.items.enableContextMenu = enableContextMenu;
-          UserSettings.commitItems();
+          void UserSettings.commitItems();
         },
         setTheme(state: MenuState, theme: string) {
           state.theme = theme;
           UserSettings.items.theme = theme;
-          UserSettings.commitItems();
+          void UserSettings.commitItems();
         },
         setAutolock(state: MenuState, autolock: number) {
           // Ignore the transient empty value while the field is being retyped,
@@ -64,7 +65,32 @@ export class Menu implements Module {
           const minutes = normalizeAutolock(raw);
           state.autolock = minutes;
           UserSettings.items.autolock = minutes;
-          UserSettings.commitItems();
+          void UserSettings.commitItems();
+        },
+      },
+      actions: {
+        async saveAutolock(
+          context: { state: MenuState },
+          autolock: number | string
+        ) {
+          const raw: unknown = autolock;
+          if (raw === "" || raw === null || raw === undefined) {
+            return;
+          }
+          const minutes = normalizeAutolock(raw);
+          context.state.autolock = minutes;
+          await UserSettings.updateItems();
+          UserSettings.items.autolock = minutes;
+          await UserSettings.commitItems();
+        },
+        async saveEnableContextMenu(
+          context: { state: MenuState },
+          enableContextMenu: boolean
+        ) {
+          context.state.enableContextMenu = enableContextMenu;
+          await UserSettings.updateItems();
+          UserSettings.items.enableContextMenu = enableContextMenu;
+          await UserSettings.commitItems();
         },
       },
       namespaced: true,
@@ -75,11 +101,16 @@ export class Menu implements Module {
     return menuState;
   }
 
-  private resize(zoom: number) {
-    if (zoom !== 100) {
-      document.body.style.marginBottom = 480 * (zoom / 100 - 1) + "px";
-      document.body.style.marginRight = 320 * (zoom / 100 - 1) + "px";
-      document.body.style.transform = "scale(" + zoom / 100 + ")";
+  private resize(zoom: number | string) {
+    const numericZoom = Number(zoom) || 100;
+    if (numericZoom !== 100) {
+      document.body.style.marginBottom = 480 * (numericZoom / 100 - 1) + "px";
+      document.body.style.marginRight = 320 * (numericZoom / 100 - 1) + "px";
+      document.body.style.transform = "scale(" + numericZoom / 100 + ")";
+    } else {
+      document.body.style.marginBottom = "";
+      document.body.style.marginRight = "";
+      document.body.style.transform = "";
     }
   }
 }

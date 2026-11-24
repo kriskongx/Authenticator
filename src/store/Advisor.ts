@@ -1,6 +1,27 @@
 import { EntryStorage } from "../models/storage";
 import { InsightLevel, AdvisorInsight } from "../models/advisor";
-import { StorageLocation, UserSettings } from "../models/settings";
+import {
+  normalizeAutolock,
+  StorageLocation,
+  UserSettings,
+} from "../models/settings";
+
+function parseIgnoreList(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.filter((item): item is string => typeof item === "string");
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw || "[]");
+      return Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
 
 const insightsData: AdvisorInsightInterface[] = [
   {
@@ -19,7 +40,10 @@ const insightsData: AdvisorInsightInterface[] = [
     validation: async () => {
       await UserSettings.updateItems();
       const hasEncryptedEntry = await EntryStorage.hasEncryptionKey();
-      return hasEncryptedEntry && !Number(UserSettings.items.autolock);
+      return (
+        hasEncryptedEntry &&
+        normalizeAutolock(UserSettings.items.autolock) === 0
+      );
     },
   },
   {
@@ -53,40 +77,56 @@ const insightsData: AdvisorInsightInterface[] = [
     ),
     validation: async () => {
       await UserSettings.updateItems();
-      return UserSettings.items.smartFilter === false;
+      return UserSettings.items.smartFilter !== true;
     },
   },
 ];
 
 export class Advisor implements Module {
+  private pendingOp: Promise<void> = Promise.resolve();
+
+  private enqueue(task: () => Promise<void>) {
+    this.pendingOp = this.pendingOp.then(task, task).catch((error) => {
+      console.error("[Advisor] operation failed:", error);
+    });
+  }
+
   async getModule() {
     await UserSettings.updateItems();
     return {
       state: {
         insights: await this.getInsights(),
-        ignoreList: UserSettings.items.advisorIgnoreList || [],
+        ignoreList: parseIgnoreList(UserSettings.items.advisorIgnoreList),
       },
       mutations: {
-        dismissInsight: async (state: AdvisorState, insightId: string) => {
-          state.ignoreList.push(insightId);
-          UserSettings.items.advisorIgnoreList = state.ignoreList;
-          UserSettings.commitItems();
-
-          state.insights = await this.getInsights();
+        dismissInsight: (state: AdvisorState, insightId: string) => {
+          if (!state.ignoreList.includes(insightId)) {
+            state.ignoreList.push(insightId);
+          }
+          const nextIgnoreList = [...state.ignoreList];
+          this.enqueue(async () => {
+            await UserSettings.updateItems();
+            UserSettings.items.advisorIgnoreList = nextIgnoreList;
+            await UserSettings.commitItems();
+            state.insights = await this.getInsights();
+          });
         },
-        clearIgnoreList: async (state: AdvisorState) => {
+        clearIgnoreList: (state: AdvisorState) => {
           state.ignoreList = [];
-          UserSettings.items.advisorIgnoreList = undefined;
-          UserSettings.commitItems();
-
-          state.insights = await this.getInsights();
+          this.enqueue(async () => {
+            await UserSettings.updateItems();
+            UserSettings.items.advisorIgnoreList = undefined;
+            await UserSettings.commitItems();
+            state.insights = await this.getInsights();
+          });
         },
-        updateInsight: async (state: AdvisorState) => {
-          state.insights = await this.getInsights();
-          state.ignoreList =
-            typeof UserSettings.items.advisorIgnoreList === "string"
-              ? JSON.parse(UserSettings.items.advisorIgnoreList || "[]")
-              : UserSettings.items.advisorIgnoreList || [];
+        updateInsight: (state: AdvisorState) => {
+          this.enqueue(async () => {
+            state.insights = await this.getInsights();
+            state.ignoreList = parseIgnoreList(
+              UserSettings.items.advisorIgnoreList
+            );
+          });
         },
       },
       namespaced: true,
@@ -95,10 +135,9 @@ export class Advisor implements Module {
 
   private async getInsights() {
     await UserSettings.updateItems();
-    const advisorIgnoreList: string[] =
-      typeof UserSettings.items.advisorIgnoreList === "string"
-        ? JSON.parse(UserSettings.items.advisorIgnoreList || "[]")
-        : UserSettings.items.advisorIgnoreList || [];
+    const advisorIgnoreList = parseIgnoreList(
+      UserSettings.items.advisorIgnoreList
+    );
 
     const filteredInsightsData: AdvisorInsightInterface[] = [];
 

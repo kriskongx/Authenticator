@@ -27,19 +27,47 @@ async function init() {
   // Load entries to global
   const cachedSecrets = await getCachedSecrets();
   const encryption = new Encryption(
-    cachedSecrets.cachedPassphrase,
-    cachedSecrets.cachedKeyId
+    cachedSecrets.cachedPassphrase || "",
+    cachedSecrets.cachedKeyId || ""
   );
+  let vaultLocked = false;
+  try {
+    await EntryStorage.assertEncryptionReadyForVault(encryption);
+  } catch {
+    vaultLocked = true;
+  }
+  const encryptions = new Map<string, Encryption>();
+  if (Array.isArray(cachedSecrets.cachedBiometricKeys)) {
+    for (const item of cachedSecrets.cachedBiometricKeys) {
+      if (
+        item &&
+        typeof item === "object" &&
+        typeof item.id === "string" &&
+        typeof item.secret === "string"
+      ) {
+        encryptions.set(item.id, new Encryption(item.secret, item.id));
+      }
+    }
+  }
+  if (encryption.getEncryptionStatus() && cachedSecrets.cachedKeyId) {
+    encryptions.set(cachedSecrets.cachedKeyId, encryption);
+  }
+
   const entries = await EntryStorage.get();
 
-  if (encryption.getEncryptionStatus()) {
+  if (encryptions.size > 0 || encryption.getEncryptionStatus()) {
     for (const entry of entries) {
-      await entry.applyEncryption(encryption);
+      const entryEncryption =
+        (entry.keyId && encryptions.get(entry.keyId)) || encryption;
+      if (entryEncryption.getEncryptionStatus()) {
+        await entry.applyEncryption(entryEncryption);
+      }
     }
   }
 
   Vue.prototype.$entries = entries;
   Vue.prototype.$encryption = encryption;
+  Vue.prototype.$vaultLocked = vaultLocked;
 
   const instance = new Vue({
     render: (h) => h(ImportView),
@@ -56,7 +84,15 @@ async function init() {
 init();
 
 async function getCachedSecrets() {
-  const { cachedPassphrase, cachedKeyId } = await chrome.storage.session.get();
+  const {
+    cachedPassphrase,
+    cachedKeyId,
+    cachedBiometricKeys,
+  } = await chrome.storage.session.get([
+    "cachedPassphrase",
+    "cachedKeyId",
+    "cachedBiometricKeys",
+  ]);
 
-  return { cachedPassphrase, cachedKeyId };
+  return { cachedPassphrase, cachedKeyId, cachedBiometricKeys };
 }

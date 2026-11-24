@@ -8,6 +8,7 @@ declare module "vue/types/vue" {
     // Only in Import
     $entries: OTPEntryInterface[];
     $encryption: EncryptionInterface;
+    $vaultLocked?: boolean;
     // In all
     i18n: { [key: string]: string };
   }

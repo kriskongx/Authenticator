@@ -18,7 +18,16 @@ export class Groups implements Module {
       },
       actions: {
         async refreshGroups(state: ActionContext<GroupsState, object>) {
-          state.commit("setGroups", await GroupStorage.get());
+          const groups = await GroupStorage.get();
+          state.commit("setGroups", groups);
+          const currentActive = state.state.activeGroupId;
+          if (
+            currentActive !== "__all__" &&
+            currentActive !== "__ungrouped__" &&
+            !groups.some((group) => group.id === currentActive)
+          ) {
+            state.commit("setActiveGroup", "__all__");
+          }
         },
         async createGroup(
           state: ActionContext<GroupsState, object>,
@@ -75,13 +84,23 @@ export class Groups implements Module {
           return true;
         },
         async deleteGroup(
-          state: ActionContext<GroupsState, object>,
+          state: ActionContext<GroupsState, { accounts?: AccountsState }>,
           groupId: string
         ) {
           if (state.rootGetters["accounts/currentlyEncrypted"]) {
             return false;
           }
-          await GroupStorage.delete(groupId);
+          try {
+            await GroupStorage.delete(
+              groupId,
+              state.rootState.accounts?.encryption
+            );
+          } catch (error) {
+            if ((error as Error)?.message === "vaultLocked") {
+              return false;
+            }
+            throw error;
+          }
           await state.dispatch("refreshGroups");
           if (state.state.activeGroupId === groupId) {
             state.commit("setActiveGroup", "__all__");

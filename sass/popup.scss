@@ -15,6 +15,12 @@
   display: none;
 }
 
+html {
+  @include themify($themes) {
+    background: themed("grey-background");
+  }
+}
+
 body {
   width: 320px;
   height: 480px;
@@ -26,10 +32,22 @@ body {
   cursor: default;
   user-select: none;
   -webkit-font-smoothing: antialiased;
-  background: #f5f5f7;
+  @include themify($themes) {
+    background: themed("grey-background");
+  }
 
   :focus {
     outline: auto;
+  }
+}
+
+.popup-shell {
+  position: relative;
+  width: 320px;
+  height: 480px;
+  overflow: hidden;
+  @include themify($themes) {
+    background: themed("grey-background");
   }
 }
 
@@ -127,15 +145,6 @@ svg {
       width: 14px;
       height: 14px;
       fill: currentColor;
-    }
-
-    // One-click backup in progress: keep the icon recognisable but moving.
-    &#i-cloud-sync.syncing {
-      opacity: 0.75;
-
-      svg {
-        animation: cloud-sync-spin 0.9s linear infinite;
-      }
     }
 
     &:hover {
@@ -2058,9 +2067,12 @@ svg {
 
     &::after {
       content: "";
-      display: block;
-      margin: 0 20px -1px 20px;
+      position: absolute;
+      left: 20px;
+      right: 20px;
+      bottom: 0;
       border-bottom: #eee 1px solid;
+      pointer-events: none;
     }
   }
 
@@ -2113,7 +2125,11 @@ svg {
 .theme-compact {
   #codes .entry {
     padding: 0 10px;
-    margin: 0 0 0 10px;
+    margin: 0;
+  }
+
+  #codes .entry.select-mode {
+    padding-left: 38px;
   }
 
   .entry {
@@ -2218,7 +2234,21 @@ svg {
   }
 
   .input {
+    color: white;
+    border-color: white;
+  }
+
+  .subpage-button.primary,
+  .batch-action-btn.move,
+  .group-create-button {
     color: black;
+  }
+
+  .subpage-button.danger,
+  .entry-swipe-action.delete,
+  .batch-action-btn.delete {
+    color: white;
+    border-color: #ff453a;
   }
 
   #notification {
@@ -2264,14 +2294,14 @@ svg {
     #menuBody {
       background: #fcfbff;
     }
+  }
 
-    #info {
-      border-radius: 8px;
-      border: #f5f4f7 1px solid;
+  #info {
+    border-radius: 8px;
+    border: #f5f4f7 1px solid;
 
-      .control-group {
-        border-bottom: #f5f4f7 1px solid;
-      }
+    .control-group {
+      border-bottom: #f5f4f7 1px solid;
     }
   }
 }

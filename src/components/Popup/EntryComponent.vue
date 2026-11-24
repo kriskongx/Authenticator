@@ -94,8 +94,9 @@
               hotp: entry.type === OTPType.hotp || entry.type === OTPType.hhex,
               timeout: entry.period - (second % entry.period) < 5,
             }"
-            v-html="showCode(entry.code)"
-          ></div>
+          >
+            {{ showCode(entry.code) }}
+          </div>
 
           <div class="entry-timer-slot">
             <div
@@ -245,7 +246,6 @@
 <script lang="ts">
 import Vue from "vue";
 import { mapState } from "vuex";
-import * as QRGen from "qrcode-generator";
 import {
   OTPEntry,
   OTPType,
@@ -351,6 +351,7 @@ export default Vue.extend({
       return (
         code === CodeState.Encrypted ||
         code === CodeState.Invalid ||
+        code.startsWith("\u2022") ||
         code.startsWith("&bull;")
       );
     },
@@ -491,9 +492,13 @@ export default Vue.extend({
       }, 0);
     },
     async saveDetails() {
+      const secretUnchanged =
+        this.draft.secret.replace(/\s+/g, "") ===
+        (this.entry.secret || "").replace(/\s+/g, "");
       const normalizedSecretData = normalizeOtpSecretForType(
         this.draft.secret,
-        this.entry.type
+        this.entry.type,
+        secretUnchanged ? 1 : 16
       );
       if (!normalizedSecretData) {
         this.$store.commit("notification/alert", this.i18n.errorsecret);
@@ -501,6 +506,15 @@ export default Vue.extend({
       }
 
       const { secret, type } = normalizedSecretData;
+      const previousState = {
+        issuer: this.entry.issuer,
+        account: this.entry.account,
+        note: this.entry.note,
+        groupId: this.entry.groupId,
+        secret: this.entry.secret,
+        type: this.entry.type,
+        code: this.entry.code,
+      };
 
       this.entry.issuer = this.draft.issuer.trim();
       this.entry.account = this.draft.account.trim();
@@ -517,13 +531,22 @@ export default Vue.extend({
         this.entry.generate();
       }
 
-      await this.entry.update();
-      this.detailsOpen = false;
-      this.$store.dispatch("accounts/updateEntries");
-      this.$store.commit(
-        "notification/alert",
-        this.i18n.updateSuccess || this.i18n.ui_saved
-      );
+      try {
+        await this.entry.update();
+        this.detailsOpen = false;
+        await this.$store.dispatch("accounts/updateEntries");
+        this.$store.commit(
+          "notification/alert",
+          this.i18n.updateSuccess || this.i18n.ui_saved
+        );
+      } catch (error) {
+        Object.assign(this.entry, previousState);
+        console.error("Failed to save entry details:", error);
+        this.$store.commit(
+          "notification/alert",
+          this.i18n.updateFailure || "Update failed."
+        );
+      }
     },
     onEntryClick(entry: OTPEntry) {
       if (this.suppressEntryClick) {
@@ -564,8 +587,8 @@ export default Vue.extend({
         codesEl.scrollTop = 0;
       }
     },
-    showQr(entry: OTPEntry) {
-      const qrUrl = getQrUrl(entry);
+    async showQr(entry: OTPEntry) {
+      const qrUrl = await getQrUrl(entry);
       if (!qrUrl) {
         return;
       }
@@ -625,7 +648,11 @@ export default Vue.extend({
       return;
     },
     async copyCode(entry: OTPEntry) {
-      if (entry.code === CodeState.Invalid || entry.code.startsWith("&bull;")) {
+      if (
+        entry.code === CodeState.Invalid ||
+        entry.code.startsWith("\u2022") ||
+        entry.code.startsWith("&bull;")
+      ) {
         return;
       }
 
@@ -647,30 +674,34 @@ export default Vue.extend({
             }
 
             if (this.$store.state.menu.useAutofill) {
-              await insertContentScript();
-              const tab = await getCurrentTab();
-              if (tab && tab.id) {
-                chrome.tabs.sendMessage(
-                  tab.id,
-                  {
-                    action: "pastecode",
-                    code: entry.code,
-                  },
-                  () => {
-                    if (chrome.runtime.lastError) {
-                      return;
+              try {
+                await insertContentScript();
+                const tab = await getCurrentTab();
+                if (tab && tab.id) {
+                  chrome.tabs.sendMessage(
+                    tab.id,
+                    {
+                      action: "pastecode",
+                      code: entry.code,
+                    },
+                    () => {
+                      if (chrome.runtime.lastError) {
+                        return;
+                      }
                     }
-                  }
-                );
+                  );
+                }
+              } catch (error) {
+                console.warn("Autofill injection skipped:", error);
               }
             }
 
-            const lastActiveElement = document.activeElement as HTMLElement;
+            const lastActiveElement = document.activeElement as HTMLElement | null;
             codeClipboard.value = entry.code;
             codeClipboard.focus();
             codeClipboard.select();
             document.execCommand("Copy");
-            lastActiveElement.focus();
+            lastActiveElement?.focus?.();
             this.$store.dispatch(
               "notification/ephermalMessage",
               this.i18n.copied
@@ -709,11 +740,14 @@ function getGroupPaletteClass(groupId: string) {
   return palettes[hash % palettes.length];
 }
 
-function getQrUrl(entry: OTPEntry) {
+async function getQrUrl(entry: OTPEntry) {
   const otpauth = buildOtpAuthUri(entry);
   if (!otpauth) {
     return "";
   }
+  const { default: QRGen } = await import(
+    /* webpackChunkName: "qrcode-generator" */ "qrcode-generator"
+  );
   const qr = QRGen(0, "L");
   qr.addData(otpauth);
   qr.make();

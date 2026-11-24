@@ -47,7 +47,7 @@
           <span class="subpage-control">
             <select
               class="subpage-select preference-zoom-select"
-              v-model="zoom"
+              v-model.number="zoom"
             >
               <option value="125">125%</option>
               <option value="100">100%</option>
@@ -221,10 +221,12 @@ export default Vue.extend({
       },
       set(smartFilter: boolean) {
         this.$store.commit("menu/setSmartFilter", smartFilter);
-        this.$store.commit(
-          "notification/alert",
-          this.i18n.activate_auto_filter
-        );
+        if (smartFilter) {
+          this.$store.commit(
+            "notification/alert",
+            this.i18n.activate_auto_filter
+          );
+        }
       },
     },
     enableContextMenu: {
@@ -284,7 +286,11 @@ export default Vue.extend({
     },
     requireContextMenuPermission() {
       if (!this.enableContextMenu) {
-        this.syncContextMenu();
+        void this.$store
+          .dispatch("menu/saveEnableContextMenu", false)
+          .then(() => {
+            this.syncContextMenu();
+          });
         return;
       }
 
@@ -294,10 +300,14 @@ export default Vue.extend({
         { permissions: ["contextMenus"] },
         (granted) => {
           if (!granted) {
-            this.$store.commit("menu/setEnableContextMenu", false);
+            void this.$store.dispatch("menu/saveEnableContextMenu", false);
             return;
           }
-          this.syncContextMenu();
+          void this.$store
+            .dispatch("menu/saveEnableContextMenu", true)
+            .then(() => {
+              this.syncContextMenu();
+            });
         }
       );
     },
