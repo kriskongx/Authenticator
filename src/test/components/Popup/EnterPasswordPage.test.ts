@@ -54,7 +54,8 @@ describe("EnterPasswordPage", () => {
     const wrapper = mount(EnterPasswordPage, { store, localVue });
 
     const passwordInput = wrapper.find("input");
-    const passwordButton = wrapper.find("button");
+    // The reveal toggle is also a button, so target the submit button by class.
+    const passwordButton = wrapper.find(".unlock-submit");
 
     passwordInput.setValue("somePassword");
     await passwordButton.trigger("click");

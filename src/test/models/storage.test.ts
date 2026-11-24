@@ -416,6 +416,140 @@ describe("Browser storage replacement", () => {
       second.hash,
     ]);
   });
+
+  it("clears groupId on encrypted entries when deleting a group", async () => {
+    const encryption = new Encryption("vault-pass", "key-1");
+    const entryHash = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const groupId = "group-delete-1";
+    const entry = new OTPEntry(
+      {
+        account: "alice@example.com",
+        encrypted: false,
+        groupId,
+        hash: entryHash,
+        index: 0,
+        issuer: "Example",
+        secret: "JBSWY3DPEHPK3PXP",
+        type: OTPType.totp,
+      },
+      encryption
+    );
+    const encRecord = EntryStorage.getStoragePayload([entry])[entryHash];
+    const groupRecord: GroupStorageRecord = {
+      dataType: "Group",
+      id: groupId,
+      index: 0,
+      name: "Work",
+    };
+
+    sinon.stub(BrowserStorage, "get").resolves({
+      [entryHash]: encRecord,
+      [groupId]: groupRecord,
+    });
+    const commitStub = sinon
+      .stub(BrowserStorage, "commitOtpAndGroupChanges")
+      .resolves();
+
+    await GroupStorage.delete(
+      groupId,
+      new Map<string, EncryptionInterface>([["key-1", encryption]])
+    );
+
+    const payload = commitStub.firstCall.args[0] as Record<
+      string,
+      EncOTPStorage
+    >;
+    expect(commitStub.firstCall.args[1]).to.deep.equal([groupId]);
+    expect(payload[entryHash]?.dataType).to.equal("EncOTPStorage");
+    const decrypted = encryption.decryptEncSecret(({
+      encData: payload[entryHash].data,
+    } as unknown) as OTPEntryInterface);
+    expect(decrypted?.groupId).to.equal(undefined);
+    expect(decrypted?.secret).to.equal("JBSWY3DPEHPK3PXP");
+  });
+
+  it("rejects mergeImport when an encrypted vault is locked", async () => {
+    sinon.stub(EntryStorage, "hasEncryptionKey").resolves(true);
+    let error: Error | null = null;
+    try {
+      await EntryStorage.mergeImport(
+        new Encryption("", ""),
+        {
+          "11111111-1111-4111-8111-111111111111": createRawEntry(
+            "11111111-1111-4111-8111-111111111111",
+            0
+          ),
+        },
+        {}
+      );
+    } catch (caught) {
+      error = caught as Error;
+    }
+    expect(error?.message).to.equal("vaultLocked");
+  });
+
+  it("appends merged entries after existing entries without interleaving indices", async () => {
+    const existingA = createRawEntry("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", 0);
+    const existingB = createRawEntry("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", 1);
+    const incomingC = createRawEntry("cccccccc-cccc-4ccc-8ccc-cccccccccccc", 0);
+    const incomingD = createRawEntry("dddddddd-dddd-4ddd-8ddd-dddddddddddd", 1);
+
+    sinon.stub(EntryStorage, "hasEncryptionKey").resolves(false);
+    sinon.stub(BrowserStorage, "get").resolves({
+      [existingA.hash]: existingA,
+      [existingB.hash]: existingB,
+    });
+    const mergeStub = sinon
+      .stub(BrowserStorage, "mergeOtpAndGroupData")
+      .resolves();
+
+    await EntryStorage.mergeImport(
+      new Encryption("", ""),
+      { [incomingC.hash]: incomingC, [incomingD.hash]: incomingD },
+      {}
+    );
+
+    const payload = mergeStub.firstCall.args[0] as Record<string, OTPStorage>;
+    expect(payload[existingA.hash].index).to.equal(0);
+    expect(payload[existingB.hash].index).to.equal(1);
+    expect(payload[incomingC.hash].index).to.equal(2);
+    expect(payload[incomingD.hash].index).to.equal(3);
+  });
+
+  it("rejects encrypted backupGetExport without an active key and plaintext export when locked", async () => {
+    const encryption = new Encryption("vault-pass", "key-1");
+    const entryHash = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const entry = new OTPEntry(
+      {
+        account: "bob@example.com",
+        encrypted: false,
+        hash: entryHash,
+        index: 0,
+        issuer: "Example",
+        secret: "JBSWY3DPEHPK3PXP",
+        type: OTPType.totp,
+      },
+      encryption
+    );
+    const encRecord = EntryStorage.getStoragePayload([entry])[entryHash];
+    sinon.stub(BrowserStorage, "get").resolves({ [entryHash]: encRecord });
+
+    let encErr: Error | null = null;
+    try {
+      await EntryStorage.backupGetExport(new Encryption("", ""), true);
+    } catch (caught) {
+      encErr = caught as Error;
+    }
+    expect(encErr?.message).to.equal("encryptionRequired");
+
+    let lockedErr: Error | null = null;
+    try {
+      await EntryStorage.backupGetExport(new Encryption("", ""), false);
+    } catch (caught) {
+      lockedErr = caught as Error;
+    }
+    expect(lockedErr?.message).to.equal("vaultLocked");
+  });
 });
 
 function createRawEntry(hash: string, index: number): RawOTPStorage {

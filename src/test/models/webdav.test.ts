@@ -1,12 +1,21 @@
 import "mocha";
 import { expect } from "chai";
+import { Encryption } from "../../models/encryption";
+import { UserSettings } from "../../models/settings";
 import {
   buildWebDAVBackupFileName,
+  encodeBasicAuth,
+  extractWebDAVRelativePath,
   getWebDAVClientPlatform,
   getWebDAVBackupsToPrune,
+  isAuthenticatorBackupFileName,
   isWebDAVBackupDue,
+  parseMultistatus,
   readWebDAVResponseText,
+  saveWebDAVConfig,
+  uploadWebDAVBackup,
 } from "../../models/webdav";
+import { quickWebDAVBackup } from "../../models/webdav-quick";
 
 mocha.setup("bdd");
 
@@ -87,6 +96,101 @@ describe("WebDAV transfer limits", () => {
 
     expect(result).to.equal("12345");
     expect(progress[progress.length - 1]).to.equal(5);
+  });
+
+  it("encodes UTF-8 Basic Auth credentials without failing on non-ASCII characters", () => {
+    const encoded = encodeBasicAuth("用户", "密码🔑");
+    const decoded = new TextDecoder().decode(
+      Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0))
+    );
+    expect(decoded).to.equal("用户:密码🔑");
+  });
+
+  it("extracts relative WebDAV paths from absolute URLs and malformed encodings", () => {
+    expect(
+      extractWebDAVRelativePath(
+        "https://dav.example.com/dav/authenticator-mac-encrypted-2026.json",
+        "https://dav.example.com/dav"
+      )
+    ).to.equal("authenticator-mac-encrypted-2026.json");
+    expect(
+      extractWebDAVRelativePath("/dav/", "https://dav.example.com/dav")
+    ).to.equal("");
+    expect(
+      extractWebDAVRelativePath(
+        "/dav/100%bad.json",
+        "https://dav.example.com/dav"
+      )
+    ).to.equal("100%bad.json");
+  });
+
+  it("identifies only Authenticator backup files for retention pruning", () => {
+    expect(
+      isAuthenticatorBackupFileName(
+        "authenticator-mac-encrypted-2026-07-28T10-11-12-123Z-123.json"
+      )
+    ).to.equal(true);
+    expect(isAuthenticatorBackupFileName("notes.txt")).to.equal(false);
+    expect(isAuthenticatorBackupFileName("keepass.kdbx")).to.equal(false);
+    expect(isAuthenticatorBackupFileName("manual.json")).to.equal(false);
+  });
+
+  it("extracts metadata across multiple propstat blocks when 404 precedes 200", () => {
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+      <d:multistatus xmlns:d="DAV:">
+        <d:response>
+          <d:href>/dav/authenticator-mac-encrypted-2026-07-28T10-11-12-123Z-123.json</d:href>
+          <d:propstat>
+            <d:prop><d:displayname/></d:prop>
+            <d:status>HTTP/1.1 404 Not Found</d:status>
+          </d:propstat>
+          <d:propstat>
+            <d:prop>
+              <d:getcontentlength>4096</d:getcontentlength>
+              <d:getlastmodified>Tue, 28 Jul 2026 10:11:12 GMT</d:getlastmodified>
+            </d:prop>
+            <d:status>HTTP/1.1 200 OK</d:status>
+          </d:propstat>
+        </d:response>
+      </d:multistatus>`;
+
+    const entries = parseMultistatus(xml);
+    expect(entries).to.have.lengthOf(1);
+    expect(entries[0].size).to.equal("4096");
+    expect(entries[0].lastModified).to.equal("Tue, 28 Jul 2026 10:11:12 GMT");
+  });
+
+  describe("WebDAV encrypted backup guard", () => {
+    afterEach(async () => {
+      await chrome.storage.local.remove("UserSettings");
+      UserSettings.items = {};
+    });
+
+    it("refuses encrypted WebDAV upload when no master password is active", async () => {
+      await saveWebDAVConfig({
+        url: "https://dav.example.com/dav",
+        username: "alice",
+        password: "secret",
+        encrypted: true,
+      });
+
+      const error = await captureError(
+        uploadWebDAVBackup(new Encryption("", ""), true)
+      );
+      expect(error.message).to.equal("encryptionRequired");
+    });
+
+    it("returns needsPassword from quickWebDAVBackup when encryption is enabled without a key", async () => {
+      await saveWebDAVConfig({
+        url: "https://dav.example.com/dav",
+        username: "alice",
+        password: "secret",
+        encrypted: true,
+      });
+
+      const result = await quickWebDAVBackup(new Encryption("", ""));
+      expect(result).to.equal("needsPassword");
+    });
   });
 });
 

@@ -2,10 +2,19 @@ import "mocha";
 import { expect } from "chai";
 import * as sinon from "sinon";
 import {
+  BIOMETRIC_UNLOCK_STORAGE_KEY,
   cacheBiometricUnlockBundle,
+  clearBiometricReauth,
+  consumeBiometricReauthVerified,
+  consumePendingPopupNotification,
+  consumePendingPopupReopenView,
   decryptBiometricUnlockBundle,
   encryptBiometricUnlockBundle,
+  hasBiometricUnlockRecord,
   isBiometricUnlockBundle,
+  markBiometricReauthVerified,
+  setPendingPopupNotification,
+  setPendingPopupReopenView,
   WebAuthnUnlockRecord,
 } from "../../models/biometric-unlock";
 mocha.setup("bdd");
@@ -91,6 +100,51 @@ describe("biometric unlock key wrapping", () => {
       cachedBiometricDefaultKeyId: "default-key",
     });
     expect(sendMessageStub.called).to.equal(false);
+    setStub.restore();
+    sendMessageStub.restore();
+  });
+
+  it("tracks one-shot reauth, reopen view, and notification handoffs", async () => {
+    await clearBiometricReauth();
+    expect(await consumeBiometricReauthVerified("k1")).to.equal(false);
+
+    await markBiometricReauthVerified("k1");
+    expect(await consumeBiometricReauthVerified("k2")).to.equal(false);
+    // A mismatch still consumes the one-shot grant so it cannot linger.
+    expect(await consumeBiometricReauthVerified("k1")).to.equal(false);
+
+    await markBiometricReauthVerified("k1");
+    expect(await consumeBiometricReauthVerified("k1")).to.equal(true);
+    expect(await consumeBiometricReauthVerified("k1")).to.equal(false);
+
+    await setPendingPopupReopenView("SetPasswordPage");
+    expect(await consumePendingPopupReopenView()).to.equal("SetPasswordPage");
+    expect(await consumePendingPopupReopenView()).to.equal(null);
+
+    await setPendingPopupNotification("webdav_restore_success");
+    expect(await consumePendingPopupNotification()).to.equal(
+      "webdav_restore_success"
+    );
+    expect(await consumePendingPopupNotification()).to.equal(null);
+  });
+
+  it("detects stored biometric records without requiring DOM WebAuthn globals", async () => {
+    const validRecord = await encryptBiometricUnlockBundle(
+      bundle,
+      new Uint8Array(32).fill(7).buffer,
+      { ...metadata, extensionId: chrome.runtime.id },
+      new Uint8Array(12).fill(3)
+    );
+    const getStub = sinon.stub(chrome.storage.local, "get");
+    try {
+      getStub.resolves({});
+      expect(await hasBiometricUnlockRecord()).to.equal(false);
+
+      getStub.resolves({ [BIOMETRIC_UNLOCK_STORAGE_KEY]: validRecord });
+      expect(await hasBiometricUnlockRecord()).to.equal(true);
+    } finally {
+      getStub.restore();
+    }
   });
 
   it("rejects duplicate, missing, or mismatched encryption keys", () => {

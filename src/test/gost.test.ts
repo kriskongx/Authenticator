@@ -118,15 +118,15 @@ function testAlgorithm(
     }
   );
   //check otp generated is valid
-  const _secret = "B1B0AE0E5ADFBF89A5F7DF440592A3AE"; //measuring 'secret'
+  const _secret = "B1B0AE0E5ADFBF89A5F7DF440592A3AE"; //measuring 'secret' (hex)
   const _date = new Date("2021-01-01T00:00:00.000Z"); //measuring 'date'
   const _counter = calculateCounter(_date);
   let _validOtp = "";
   if (algorithm === OTPAlgorithm.GOST3411_2012_256) {
-    _validOtp = "982313"; //measuring 'otp'
+    _validOtp = "147947"; //measuring 'otp'
   }
   if (algorithm === OTPAlgorithm.GOST3411_2012_512) {
-    _validOtp = "733980"; //measuring 'otp'
+    _validOtp = "838480"; //measuring 'otp'
   }
   it(
     "(" +
@@ -141,7 +141,7 @@ function testAlgorithm(
       "', verifying",
     async () => {
       const _otp = await KeyUtilities.generate(
-        OTPType.hotp,
+        OTPType.hhex,
         _secret,
         _counter,
         30,
