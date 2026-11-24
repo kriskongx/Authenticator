@@ -4,12 +4,14 @@ import {
   getClientDay,
   getWebDAVConfig,
   getWebDAVOrigin,
+  pruneWebDAVBackups,
   uploadWebDAVBackup,
 } from "./webdav";
 
 export type QuickBackupResult =
   | "ok"
   | "unconfigured"
+  | "needsPassword"
   | "denied"
   | "timeout"
   | "error";
@@ -49,18 +51,24 @@ export async function quickWebDAVBackup(
   if (!config.url || !config.username || !config.password) {
     return "unconfigured";
   }
+  const encryptedBackup = config.encrypted !== false;
+  if (encryptedBackup && !encryption.getEncryptionStatus()) {
+    return "needsPassword";
+  }
   const origin = getWebDAVOrigin(config.url);
   if (!(await ensureOriginPermission(origin))) {
     return "denied";
   }
   try {
-    const ok = await uploadWebDAVBackup(encryption, config.encrypted !== false);
+    const ok = await uploadWebDAVBackup(encryption, encryptedBackup);
     if (!ok) {
       return "error";
     }
     // Keep the shared schedule in sync: a manual backup also resets the timer.
+    await UserSettings.updateItems();
     UserSettings.items.webdavLastBackupTime = getClientDay();
     await UserSettings.commitItems();
+    await pruneWebDAVBackups(Number(UserSettings.items.webdavMaxBackups || 0));
     return "ok";
   } catch (error) {
     return (error as Error).message === "webdavTimeout" ? "timeout" : "error";

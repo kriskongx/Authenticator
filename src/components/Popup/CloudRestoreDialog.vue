@@ -7,10 +7,12 @@
     @keydown.esc.stop.prevent="close"
   >
     <div
+      ref="dialog"
       class="subpage-dialog cloud-restore-dialog"
       role="dialog"
       aria-modal="true"
       aria-labelledby="cloudRestoreTitle"
+      tabindex="-1"
     >
       <div class="cloud-restore-head">
         <span class="subpage-dialog-title" id="cloudRestoreTitle">
@@ -26,7 +28,7 @@
           <IconXCircle />
         </button>
       </div>
-      <CloudRestorePanel @restored="close" />
+      <CloudRestorePanel ref="panel" @restored="forceClose" />
     </div>
   </div>
 </template>
@@ -37,14 +39,45 @@ import CloudRestorePanel from "./CloudRestorePanel.vue";
 
 export default Vue.extend({
   components: { CloudRestorePanel, IconXCircle },
+  data() {
+    return {
+      previousFocus: null as HTMLElement | null,
+    };
+  },
   computed: {
     open(): boolean {
       // Style is a namespaced module whose state is itself wrapped in `style`.
       return this.$store.state.style.style.cloudRestoreOpen;
     },
   },
+  watch: {
+    open(isOpen: boolean, wasOpen: boolean) {
+      if (isOpen && !wasOpen) {
+        this.previousFocus =
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        this.$nextTick(() => {
+          (this.$refs.dialog as HTMLElement | undefined)?.focus?.();
+        });
+      } else if (!isOpen && wasOpen) {
+        this.previousFocus?.focus?.();
+        this.previousFocus = null;
+      }
+    },
+  },
   methods: {
+    isRestoring(): boolean {
+      const panel = this.$refs.panel as { restoring?: boolean } | undefined;
+      return Boolean(panel?.restoring);
+    },
     close() {
+      if (this.isRestoring()) {
+        return;
+      }
+      this.forceClose();
+    },
+    forceClose() {
       this.$store.commit("style/closeCloudRestore");
     },
   },

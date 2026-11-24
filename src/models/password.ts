@@ -1,21 +1,93 @@
 import { BrowserStorage, isOldKey } from "./storage";
 
 const ARGON_TIMEOUT_MS = 20000;
+const ARGON_READY_TIMEOUT_MS = 5000;
 let argonRequestCounter = 0;
+const readyArgonWindows = new WeakSet<Window>();
 
 type ArgonRequest =
   | { action: "hash"; value: string; salt: string }
   | { action: "verify"; value: string; hash: string };
 
-function requestArgon<T>(request: ArgonRequest): Promise<T> {
+function ensureArgonSandboxReady(
+  iframe: HTMLIFrameElement,
+  targetWindow: Window
+): Promise<void> {
+  if (readyArgonWindows.has(targetWindow)) {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const pingId = `argon-ping-${Date.now()}-${++argonRequestCounter}`;
+    let settled = false;
+
+    const cleanup = () => {
+      window.removeEventListener("message", handleMessage);
+      iframe.removeEventListener("load", sendPing);
+      window.clearInterval(intervalId);
+      window.clearTimeout(timeoutId);
+    };
+
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      readyArgonWindows.add(targetWindow);
+      cleanup();
+      resolve();
+    };
+
+    const handleMessage = (event: MessageEvent) => {
+      if (event.source !== targetWindow || !event.data) {
+        return;
+      }
+      if (
+        event.data.type === "argon-ready" ||
+        (event.data.requestId === pingId && event.data.response === "pong")
+      ) {
+        finish();
+      }
+    };
+
+    const sendPing = () => {
+      try {
+        targetWindow.postMessage({ action: "ping", requestId: pingId }, "*");
+      } catch {
+        // Ignore until the sandbox window is reachable.
+      }
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(new Error("argon2 sandbox timed out"));
+    }, ARGON_READY_TIMEOUT_MS);
+
+    const intervalId = window.setInterval(sendPing, 100);
+    window.addEventListener("message", handleMessage);
+    iframe.addEventListener("load", sendPing);
+    sendPing();
+  });
+}
+
+async function requestArgon<T>(request: ArgonRequest): Promise<T> {
+  if (typeof document === "undefined") {
+    throw new Error("argonSandboxUnavailable");
+  }
   const iframe = document.getElementById(
     "argon-sandbox"
   ) as HTMLIFrameElement | null;
   const targetWindow = iframe?.contentWindow;
 
-  if (!targetWindow) {
+  if (!iframe || !targetWindow) {
     throw new Error("argon-sandbox missing!");
   }
+
+  await ensureArgonSandboxReady(iframe, targetWindow);
 
   const requestId = `argon-${Date.now()}-${++argonRequestCounter}`;
 
@@ -97,6 +169,24 @@ export async function verifyPasswordUsingKeyID(
   }
 
   return verifyPasswordUsingKey(key, password);
+}
+
+export async function verifyDerivedKeyUsingKeyID(
+  keyId: string,
+  derivedSecret: string
+): Promise<boolean> {
+  if (!derivedSecret) {
+    return false;
+  }
+  const keys = await BrowserStorage.getKeys();
+  if (isOldKey(keys)) {
+    return false;
+  }
+  const key = keys.find((item) => item.id === keyId);
+  if (!key) {
+    return false;
+  }
+  return argonVerify(derivedSecret, key.hash);
 }
 
 export async function verifyPasswordUsingKey(

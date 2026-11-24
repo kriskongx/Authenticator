@@ -36,6 +36,9 @@ import {
 import ImportFeedbackMixin from "./import-feedback";
 
 export default ImportFeedbackMixin.extend({
+  beforeDestroy() {
+    this.importAbortController?.abort();
+  },
   methods: {
     getImportSummary(args: {
       failedCount: number;
@@ -76,6 +79,7 @@ export default ImportFeedbackMixin.extend({
         return;
       }
       const signal = this.startImport(this.i18n.ui_importing_qr);
+      const runId = this.importRunId;
       this.setProgress(8, this.i18n.ui_progress_waiting_qr);
 
       try {
@@ -86,7 +90,7 @@ export default ImportFeedbackMixin.extend({
         const scannedCount = files.length;
 
         for (let fileIndex = 0; fileIndex < files.length; fileIndex++) {
-          if (signal.aborted) {
+          if (signal.aborted || !this.isActiveImport(runId)) {
             throw new Error("importCancelled");
           }
           const file = files[fileIndex];
@@ -104,13 +108,16 @@ export default ImportFeedbackMixin.extend({
 
           try {
             const otpUrl = await getOtpUrlFromQrFile(file, signal);
+            if (!this.isActiveImport(runId)) {
+              return;
+            }
             if (otpUrl) {
               otpUrlList.push(otpUrl);
             } else {
               imageFailedCount++;
             }
           } catch (error) {
-            if (signal.aborted) {
+            if (signal.aborted || !this.isActiveImport(runId)) {
               throw error;
             }
             console.error("Failed to decode QR image:", file.name, error);
@@ -118,10 +125,16 @@ export default ImportFeedbackMixin.extend({
           }
         }
 
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
         this.setProgress(66, this.i18n.ui_progress_parsing_otp);
         const result = await getEntryDataFromOTPAuthPerLine(
           otpUrlList.join("\n")
         );
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
         const { failedCount } = result;
         if (!Object.keys(result.exportData).length) {
           this.importSummaryTitle = this.i18n.ui_import_failed;
@@ -141,8 +154,11 @@ export default ImportFeedbackMixin.extend({
           { entries: result.exportData, groups: {} },
           {
             encryption: this.$encryption as Encryption,
-            onProgress: (value, key) =>
-              this.setProgress(value, this.i18n[key] || key),
+            onProgress: (value, key) => {
+              if (this.isActiveImport(runId)) {
+                this.setProgress(value, this.i18n[key] || key);
+              }
+            },
             refresh: this.$store
               ? async () => {
                   await this.$store.dispatch("groups/refreshGroups");
@@ -152,6 +168,9 @@ export default ImportFeedbackMixin.extend({
             signal,
           }
         );
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
 
         this.importSummaryTitle =
           failedCount === 0 && imageFailedCount === 0
@@ -173,6 +192,9 @@ export default ImportFeedbackMixin.extend({
           importedEntryCount: appliedResult.importedEntryCount,
         });
         this.setProgress(100, this.i18n.ui_import_complete);
+        chrome.runtime?.sendMessage?.({ action: "entriesUpdated" }, () => {
+          void chrome.runtime.lastError;
+        });
 
         if (closeWindow) {
           window.scrollTo({
@@ -181,7 +203,10 @@ export default ImportFeedbackMixin.extend({
           });
         }
       } catch (error) {
-        if (this.isImportCancellation(error)) {
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
+        if (this.isImportCancellation(error, signal)) {
           if (!this.importSummaryMessage) {
             this.cancelImport();
           }

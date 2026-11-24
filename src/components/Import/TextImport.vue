@@ -29,6 +29,10 @@ otpauth://hotp/...
           :label="i18n.phrase"
           v-model="importPassphrase"
           type="password"
+          :biometric="biometricEnabled"
+          :biometric-disabled="importInProgress"
+          :biometric-title="i18n.biometric_decrypt_backup"
+          @biometric="importBackupCode(true)"
           v-show="importEncrypted"
         />
       </div>
@@ -48,6 +52,10 @@ otpauth://hotp/...
   </div>
 </template>
 <script lang="ts">
+import {
+  isBiometricUnlockEnabled,
+  unlockBiometricBackupKeys,
+} from "../../models/biometric-unlock";
 import { Encryption } from "../../models/encryption";
 import {
   applyDecryptedBackup,
@@ -62,7 +70,20 @@ export default ImportFeedbackMixin.extend({
       importCode: "",
       importEncrypted: false,
       importPassphrase: "",
+      biometricEnabled: false,
     };
+  },
+  created() {
+    void isBiometricUnlockEnabled()
+      .then((enabled) => {
+        this.biometricEnabled = enabled;
+      })
+      .catch(() => {
+        this.biometricEnabled = false;
+      });
+  },
+  beforeDestroy() {
+    this.importAbortController?.abort();
   },
   methods: {
     getImportSummary(args: {
@@ -91,11 +112,32 @@ export default ImportFeedbackMixin.extend({
 
       return lines.join("\n");
     },
-    async importBackupCode() {
+    async importBackupCode(useBiometrics = false) {
       if (this.importInProgress) {
         return;
       }
+      let preUnlockedKeys: Map<string, string> | undefined;
+      if (
+        this.importEncrypted &&
+        this.biometricEnabled &&
+        (useBiometrics || !this.importPassphrase)
+      ) {
+        try {
+          preUnlockedKeys = await unlockBiometricBackupKeys();
+        } catch (error) {
+          const notAllowed =
+            error instanceof Error && error.name === "NotAllowedError";
+          this.importSummaryTitle = this.i18n.ui_import_failed;
+          this.importSummaryTone = "error";
+          this.importSummaryMessage = notAllowed
+            ? this.i18n.biometric_unlock_cancelled
+            : this.i18n.biometric_unlock_failed;
+          this.setProgress(100, this.i18n.ui_import_error);
+          return;
+        }
+      }
       const signal = this.startImport(this.i18n.ui_importing_backup);
+      const runId = this.importRunId;
       this.setProgress(10, this.i18n.ui_progress_parsing_backup_text);
 
       try {
@@ -103,13 +145,19 @@ export default ImportFeedbackMixin.extend({
           this.importCode,
           {
             signal,
-            onProgress: (value) =>
-              this.setProgress(
-                10 + value * 0.22,
-                this.i18n.ui_progress_parsing_backup_text
-              ),
+            onProgress: (value) => {
+              if (this.isActiveImport(runId)) {
+                this.setProgress(
+                  10 + value * 0.22,
+                  this.i18n.ui_progress_parsing_backup_text
+                );
+              }
+            },
           }
         );
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
         this.setProgress(
           32,
           parsedBackup.source === "otpauth"
@@ -117,27 +165,32 @@ export default ImportFeedbackMixin.extend({
             : this.i18n.ui_progress_organizing_records
         );
         const passphrase: string | null =
-          this.importEncrypted && this.importPassphrase
+          !preUnlockedKeys && this.importEncrypted && this.importPassphrase
             ? this.importPassphrase
             : null;
         this.setProgress(
           52,
-          passphrase
+          passphrase || preUnlockedKeys
             ? this.i18n.ui_progress_decrypting
             : this.i18n.ui_progress_preparing_import
         );
         const decryptedBackup = await decryptParsedBackup(
           parsedBackup,
           passphrase,
-          signal
+          signal,
+          preUnlockedKeys
         );
-        const failedCount = parsedBackup.failedCount;
-        const succeededCount = parsedBackup.succeededCount;
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
         this.lockImportCancellation();
         const result = await applyDecryptedBackup(decryptedBackup, {
           encryption: this.$encryption as Encryption,
-          onProgress: (value, key) =>
-            this.setProgress(value, this.i18n[key] || key),
+          onProgress: (value, key) => {
+            if (this.isActiveImport(runId)) {
+              this.setProgress(value, this.i18n[key] || key);
+            }
+          },
           refresh: this.$store
             ? async () => {
                 await this.$store.dispatch("groups/refreshGroups");
@@ -146,7 +199,16 @@ export default ImportFeedbackMixin.extend({
             : undefined,
           signal,
         });
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
 
+        const skippedOnDecrypt = Math.max(
+          0,
+          parsedBackup.succeededCount - result.importedEntryCount
+        );
+        const failedCount = parsedBackup.failedCount + skippedOnDecrypt;
+        const succeededCount = result.importedEntryCount;
         this.importSummaryTitle =
           failedCount === 0
             ? this.i18n.ui_import_complete
@@ -165,13 +227,19 @@ export default ImportFeedbackMixin.extend({
           ...result,
         });
         this.setProgress(100, this.i18n.ui_import_complete);
+        chrome.runtime?.sendMessage?.({ action: "entriesUpdated" }, () => {
+          void chrome.runtime.lastError;
+        });
         window.scrollTo({
           top: document.body.scrollHeight,
           behavior: "smooth",
         });
         return;
       } catch (error) {
-        if (this.isImportCancellation(error)) {
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
+        if (this.isImportCancellation(error, signal)) {
           if (!this.importSummaryMessage) {
             this.cancelImport();
           }

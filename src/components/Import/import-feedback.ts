@@ -18,6 +18,7 @@ export default Vue.extend({
       importProgressTitle: this.i18n.ui_importing_backup,
       importAbortController: null as AbortController | null,
       importCanCancel: false,
+      importRunId: 0,
     };
   },
   beforeDestroy() {
@@ -33,8 +34,12 @@ export default Vue.extend({
       this.importProgressValue = 0;
       this.importProgressLabel = "";
     },
+    isActiveImport(runId: number) {
+      return this.importRunId === runId;
+    },
     startImport(title: string) {
       this.importAbortController?.abort();
+      this.importRunId += 1;
       this.resetImportFeedback();
       this.importProgressTitle = title;
       this.importAbortController = new AbortController();
@@ -59,8 +64,9 @@ export default Vue.extend({
       this.importSummaryMessage = this.i18n.ui_no_data_changed;
       this.setProgress(100, this.i18n.ui_import_cancelled);
     },
-    isImportCancellation(error: unknown) {
+    isImportCancellation(error: unknown, signal?: AbortSignal) {
       return (
+        signal?.aborted === true ||
         this.importAbortController?.signal.aborted === true ||
         (error instanceof Error &&
           (error.message === "importCancelled" ||
@@ -81,12 +87,20 @@ export default Vue.extend({
       const rawMessage =
         error instanceof Error ? error.message : String(error || "");
 
+      if (rawMessage === "vaultLocked") {
+        return this.i18n.import_error_password;
+      }
+
       if (rawMessage === "passphraseRequired") {
         return this.i18n.ui_error_passphrase_required;
       }
 
       if (rawMessage === "incorrectPassphrase") {
         return this.i18n.ui_error_incorrect_passphrase;
+      }
+
+      if (rawMessage === "biometricBackupKeyMismatch") {
+        return this.i18n.biometric_backup_key_mismatch;
       }
 
       if (rawMessage === "invalidBackupFormat") {

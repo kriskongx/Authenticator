@@ -12,6 +12,7 @@ export type BackupImportSource = "json" | "bitwarden" | "otpauth";
 export interface BackupImportOptions {
   content: string;
   passphrase?: string | null;
+  preUnlockedKeys?: Map<string, string>;
   clearFirst?: boolean;
   /** Drop records that already exist in the vault. Default true. */
   skipExisting?: boolean;
@@ -53,12 +54,17 @@ function entryKey(
 }
 
 async function collectExistingEntryKeys(
-  encryption: Encryption
+  defaultEncryption: Encryption,
+  encryptions: Map<string, Encryption>
 ): Promise<Set<string>> {
   const keys = new Set<string>();
   const entries = await EntryStorage.get();
   for (const entry of entries) {
-    await entry.applyEncryption(encryption);
+    const entryEncryption =
+      (entry.keyId && encryptions.get(entry.keyId)) || defaultEncryption;
+    if (entryEncryption.getEncryptionStatus()) {
+      await entry.applyEncryption(entryEncryption);
+    }
     if (entry.secret) {
       keys.add(entryKey(entry.issuer, entry.account, entry.secret));
     }
@@ -71,8 +77,9 @@ async function collectExistingEntryKeys(
  * touching the DOM, so the service worker can import a backup on behalf of an
  * external caller.
  *
- * The vault must be unlocked: writing entries through an empty `Encryption`
- * would store plaintext secrets inside an encrypted vault.
+ * When the vault has an encryption key configured, it must be unlocked first:
+ * writing entries through an empty `Encryption` would store plaintext secrets
+ * inside an encrypted vault.
  */
 export async function importBackupContent(
   options: BackupImportOptions
@@ -85,24 +92,50 @@ export async function importBackupContent(
     throw new Error("backupContentTooLarge");
   }
 
-  const { cachedPassphrase, cachedKeyId } = await chrome.storage.session.get([
+  const {
+    cachedPassphrase,
+    cachedKeyId,
+    cachedBiometricKeys,
+  } = await chrome.storage.session.get([
     "cachedPassphrase",
     "cachedKeyId",
+    "cachedBiometricKeys",
   ]);
-  const encryption = new Encryption(cachedPassphrase, cachedKeyId);
-  if (!encryption.getEncryptionStatus()) {
-    throw new Error("vaultLocked");
+  const encryption = await EntryStorage.assertEncryptionReadyForVault(
+    new Encryption(cachedPassphrase || "", cachedKeyId || "")
+  );
+
+  const encryptions = new Map<string, Encryption>();
+  if (Array.isArray(cachedBiometricKeys)) {
+    for (const item of cachedBiometricKeys) {
+      if (
+        item &&
+        typeof item === "object" &&
+        typeof item.id === "string" &&
+        typeof item.secret === "string"
+      ) {
+        encryptions.set(item.id, new Encryption(item.secret, item.id));
+      }
+    }
+  }
+  if (encryption.getEncryptionStatus() && cachedKeyId) {
+    encryptions.set(cachedKeyId, encryption);
   }
 
   const parsed = await parseBackupContent(content);
   const decrypted = await decryptParsedBackup(
     parsed,
-    options.passphrase || null
+    options.passphrase || null,
+    undefined,
+    options.preUnlockedKeys
   );
 
   let skippedEntryCount = 0;
   if (options.clearFirst !== true && options.skipExisting !== false) {
-    const existingKeys = await collectExistingEntryKeys(encryption);
+    const existingKeys = await collectExistingEntryKeys(
+      encryption,
+      encryptions
+    );
     for (const hash of Object.keys(decrypted.entries)) {
       const record = decrypted.entries[hash];
       const key = entryKey(record.issuer, record.account, record.secret);
@@ -140,14 +173,19 @@ export async function importBackupContent(
 }
 
 export async function isVaultLocked(): Promise<boolean> {
-  const { cachedPassphrase } = await chrome.storage.session.get(
-    "cachedPassphrase"
-  );
-  if (cachedPassphrase) {
+  if (!(await EntryStorage.hasEncryptionKey())) {
     return false;
   }
-  const entries = await EntryStorage.get();
-  return entries.some(
-    (entry) => Boolean(entry.encData) || Boolean(entry.encSecret)
-  );
+  const { cachedPassphrase, cachedKeyId } = await chrome.storage.session.get([
+    "cachedPassphrase",
+    "cachedKeyId",
+  ]);
+  try {
+    await EntryStorage.assertEncryptionReadyForVault(
+      new Encryption(cachedPassphrase || "", cachedKeyId || "")
+    );
+    return false;
+  } catch {
+    return true;
+  }
 }

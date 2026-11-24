@@ -54,6 +54,9 @@ export default Vue.extend({
     };
   },
   computed: {
+    backupSubPage(): string {
+      return this.$store.state.style.style.backupSubPage || "BackupPage";
+    },
     pageTitle(): string {
       if (this.currentPage === "ExportBackupPage") {
         return this.i18n.ui_export_backup;
@@ -71,8 +74,12 @@ export default Vue.extend({
     active(value: boolean) {
       if (value) {
         // The header's cloud icon opens this panel straight on the sync page.
-        this.currentPage =
-          this.$store.state.style.style.backupSubPage || "BackupPage";
+        this.currentPage = this.backupSubPage;
+      }
+    },
+    backupSubPage(page: string) {
+      if (this.active) {
+        this.currentPage = page;
       }
     },
   },

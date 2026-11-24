@@ -45,9 +45,8 @@
           <span class="subpage-field-label">
             {{ i18n.webdav_password || "Password" }}
           </span>
-          <input
-            class="subpage-text-input"
-            type="password"
+          <a-password-input
+            input-class="subpage-text-input"
             v-model="webdav.password"
             autocomplete="current-password"
           />
@@ -133,6 +132,7 @@
             <span class="subpage-row-desc">{{
               i18n.webdav_backup_interval_desc
             }}</span>
+            <span class="subpage-row-desc">{{ lastAutoBackupSummary }}</span>
           </span>
           <span class="subpage-control">
             <input
@@ -209,7 +209,7 @@
             type="button"
             class="subpage-button"
             :disabled="webdav.isLoadingList"
-            @click="refreshWebDAVList"
+            @click="refreshWebDAVList(false)"
           >
             {{
               webdav.isLoadingList
@@ -352,12 +352,15 @@
         </div>
         <label class="subpage-field">
           <span class="subpage-field-label">{{ i18n.phrase }}</span>
-          <input
+          <a-password-input
             ref="restorePassphraseInput"
-            class="subpage-text-input"
-            type="password"
+            input-class="subpage-text-input"
             v-model="restorePassphrase"
             autocomplete="current-password"
+            :biometric="biometricEnabled"
+            :biometric-disabled="biometricBusy"
+            :biometric-title="i18n.biometric_decrypt_backup"
+            @biometric="unlockRestorePassphraseWithBiometrics"
           />
         </label>
         <div class="subpage-actions">
@@ -386,9 +389,18 @@ import IconDatabase from "../../../svg/database.svg";
 import IconSync from "../../../svg/sync.svg";
 import { Encryption } from "../../models/encryption";
 import { MAX_BACKUP_CONTENT_BYTES } from "../../models/import-limits";
-import { restoreBackupContent } from "../../models/backup-restore";
+import {
+  type BackupPassphraseResult,
+  restoreBackupContent,
+} from "../../models/backup-restore";
+import {
+  isBiometricUnlockEnabled,
+  isDetachedPopupWindow,
+  unlockBiometricBackupKeys,
+} from "../../models/biometric-unlock";
 import {
   downloadWebDAVBackup,
+  getClientDay,
   getWebDAVConfig,
   listWebDAVBackups,
   saveWebDAVConfig,
@@ -437,22 +449,38 @@ export default Vue.extend({
         isSaving: false,
         message: "",
         lastBackupDay: 0,
+        lastAutoBackupAt: 0,
         restoreProgress: 0,
         restoreProgressLabel: "",
         restoreCanCancel: false,
       },
+      biometricEnabled: false,
+      biometricBusy: false,
       restoreAbortController: null as AbortController | null,
       restorePassphraseDialogOpen: false,
       restorePassphrase: "",
       restorePassphraseResolver: null as
-        | ((passphrase: string | null) => void)
+        | ((passphrase: BackupPassphraseResult) => void)
         | null,
+      pendingRestorePayload: null as {
+        content: string;
+        clearFirst: boolean;
+      } | null,
     };
   },
   created() {
+    chrome.runtime.onMessage.addListener(this.onRuntimeMessage);
     this.loadWebDAVSettings();
+    void isBiometricUnlockEnabled()
+      .then((enabled) => {
+        this.biometricEnabled = enabled;
+      })
+      .catch(() => {
+        this.biometricEnabled = false;
+      });
   },
   beforeDestroy() {
+    chrome.runtime.onMessage.removeListener(this.onRuntimeMessage);
     this.restoreAbortController?.abort();
     this.cancelRestorePassphrase();
   },
@@ -475,6 +503,26 @@ export default Vue.extend({
       const ms = backupDayToMs(this.webdav.lastBackupDay);
       return new Date(ms).toLocaleDateString();
     },
+    lastAutoBackupSummary(): string {
+      if (!this.webdav.lastAutoBackupAt) {
+        return (
+          this.i18n.webdav_never_auto_backed_up || "No automatic backup yet"
+        );
+      }
+      const formatted = new Date(this.webdav.lastAutoBackupAt).toLocaleString(
+        undefined,
+        {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+        }
+      );
+      return `${
+        this.i18n.webdav_last_auto_backup || "Last automatic backup"
+      }: ${formatted}`;
+    },
     hourOptions(): number[] {
       return Array.from({ length: 24 }, (_, index) => index);
     },
@@ -485,6 +533,19 @@ export default Vue.extend({
     },
   },
   methods: {
+    onRuntimeMessage(message: { action?: string }): boolean {
+      if (message?.action === "webdavBackupUpdated") {
+        void UserSettings.updateItems().then(() => {
+          this.webdav.lastBackupDay = normalizeBackupDay(
+            UserSettings.items.webdavLastBackupTime
+          );
+          this.webdav.lastAutoBackupAt = Number(
+            UserSettings.items.webdavLastAutoBackupAt || 0
+          );
+        });
+      }
+      return false;
+    },
     async loadWebDAVSettings() {
       const config = await getWebDAVConfig();
       this.webdav.serverUrl = config.url;
@@ -506,6 +567,9 @@ export default Vue.extend({
       this.webdav.lastBackupDay = normalizeBackupDay(
         UserSettings.items.webdavLastBackupTime
       );
+      this.webdav.lastAutoBackupAt = Number(
+        UserSettings.items.webdavLastAutoBackupAt || 0
+      );
       if (config.url) {
         this.refreshWebDAVList(true);
       }
@@ -524,7 +588,6 @@ export default Vue.extend({
         await saveWebDAVConfig(this.webdavConfig);
         UserSettings.items.webdavMaxBackups = this.webdav.maxBackups;
         await UserSettings.commitItems();
-        this.syncAutoBackupAlarm();
         this.syncAutoBackupAlarm();
         this.notify(this.i18n.updateSuccess);
       } finally {
@@ -612,7 +675,7 @@ export default Vue.extend({
       if (!this.validateWebDAVFields()) {
         return;
       }
-      const granted = await this.ensureWebDAVPermission();
+      const granted = await this.ensureWebDAVPermission(!silent);
       if (!granted) {
         return;
       }
@@ -705,6 +768,8 @@ export default Vue.extend({
           this.notify(this.i18n.webdav_restore_parse_error);
         } else if (message === "incorrectPassphrase") {
           this.notify(this.i18n.ui_incorrect_backup_password);
+        } else if (message === "biometricBackupKeyMismatch") {
+          this.notify(this.i18n.biometric_backup_key_mismatch);
         } else if (message === "backupContentTooLarge") {
           this.notify(this.i18n.ui_error_backup_too_large);
         } else if (message === "webdavTimeout") {
@@ -761,27 +826,32 @@ export default Vue.extend({
       signal?: AbortSignal,
       onProgress?: (value: number, label: string) => void
     ) {
-      const result = await restoreBackupContent({
-        content,
-        encryption,
-        clearFirst,
-        signal,
-        requestPassphrase: () => this.promptRestorePassphrase(),
-        onProgress: (value, key) =>
-          onProgress?.(value, this.i18n[key] || key),
-        onApplyStart: () => {
-          this.webdav.restoreCanCancel = false;
-        },
-        refresh: async () => {
-          await this.$store.dispatch("groups/refreshGroups");
-          await this.$store.dispatch("accounts/updateEntries");
-        },
-      });
+      this.pendingRestorePayload = { content, clearFirst };
+      try {
+        const result = await restoreBackupContent({
+          content,
+          encryption,
+          clearFirst,
+          signal,
+          requestPassphrase: () => this.promptRestorePassphrase(),
+          onProgress: (value, key) =>
+            onProgress?.(value, this.i18n[key] || key),
+          onApplyStart: () => {
+            this.webdav.restoreCanCancel = false;
+          },
+          refresh: async () => {
+            await this.$store.dispatch("groups/refreshGroups");
+            await this.$store.dispatch("accounts/updateEntries");
+          },
+        });
 
-      if (result.failedCount > 0 && result.succeededCount === 0) {
-        this.notify(this.i18n.migration_fail);
-      } else if (result.failedCount > 0) {
-        this.notify(this.i18n.migration_partly_fail);
+        if (result.failedCount > 0 && result.succeededCount === 0) {
+          this.notify(this.i18n.migration_fail);
+        } else if (result.failedCount > 0) {
+          this.notify(this.i18n.migration_partly_fail);
+        }
+      } finally {
+        this.pendingRestorePayload = null;
       }
     },
     async promptRestorePassphrase() {
@@ -790,12 +860,86 @@ export default Vue.extend({
       this.restorePassphraseDialogOpen = true;
       this.$nextTick(() => {
         const input = this.$refs.restorePassphraseInput as
-          | HTMLInputElement
+          | { focus?: () => void }
           | undefined;
-        input?.focus();
+        input?.focus?.();
       });
-      return new Promise<string | null>((resolve) => {
+      return new Promise<BackupPassphraseResult>((resolve) => {
         this.restorePassphraseResolver = resolve;
+      });
+    },
+    async unlockRestorePassphraseWithBiometrics() {
+      if (
+        !this.biometricEnabled ||
+        this.biometricBusy ||
+        !this.restorePassphraseResolver
+      ) {
+        return;
+      }
+      this.biometricBusy = true;
+      try {
+        const preUnlockedKeys = await unlockBiometricBackupKeys();
+        if (!isDetachedPopupWindow() && this.pendingRestorePayload) {
+          const response = await this.completeBiometricBackupRestore(
+            this.pendingRestorePayload.content,
+            this.pendingRestorePayload.clearFirst,
+            preUnlockedKeys
+          );
+          if (!response.ok) {
+            if (response.error?.includes("biometricBackupKeyMismatch")) {
+              this.notify(this.i18n.biometric_backup_key_mismatch);
+              return;
+            }
+            throw new Error(response.error || "webdav_restore_failure");
+          }
+          const resolver = this.restorePassphraseResolver;
+          this.restorePassphraseResolver = null;
+          this.restorePassphraseDialogOpen = false;
+          this.restorePassphrase = "";
+          resolver?.({ handledInBackground: true });
+          return;
+        }
+        const resolver = this.restorePassphraseResolver;
+        this.restorePassphraseResolver = null;
+        this.restorePassphraseDialogOpen = false;
+        this.restorePassphrase = "";
+        resolver?.({ preUnlockedKeys });
+      } catch (error) {
+        const notAllowed =
+          error instanceof Error && error.name === "NotAllowedError";
+        this.notify(
+          notAllowed
+            ? this.i18n.biometric_unlock_cancelled
+            : this.i18n.biometric_unlock_failed
+        );
+      } finally {
+        this.biometricBusy = false;
+      }
+    },
+    completeBiometricBackupRestore(
+      content: string,
+      clearFirst: boolean,
+      preUnlockedKeys: Map<string, string>
+    ): Promise<{ ok: boolean; error?: string }> {
+      return new Promise((resolve) => {
+        chrome.runtime.sendMessage(
+          {
+            action: "completeBiometricBackupRestore",
+            content,
+            clearFirst,
+            preUnlockedKeys: Array.from(preUnlockedKeys.entries()).map(
+              ([id, secret]) => ({ id, secret })
+            ),
+            reopenPopup: true,
+          },
+          (response?: { ok?: boolean; error?: string }) => {
+            if (chrome.runtime.lastError) {
+              resolve({ ok: false, error: chrome.runtime.lastError.message });
+              return;
+            }
+            resolve({ ok: response?.ok === true, error: response?.error });
+          }
+        );
       });
     },
     submitRestorePassphrase() {
@@ -838,20 +982,38 @@ export default Vue.extend({
     getOriginFromUrl(url: string) {
       return getWebDAVOrigin(url);
     },
-    ensureWebDAVPermission(): Promise<boolean> {
+    ensureWebDAVPermission(interactive = true): Promise<boolean> {
       return new Promise((resolve) => {
         const origin = this.getOriginFromUrl(this.webdav.serverUrl);
         if (!origin) {
-          this.notify(this.i18n.webdav_invalid_url);
+          if (interactive) {
+            this.notify(this.i18n.webdav_invalid_url);
+          }
           resolve(false);
           return;
         }
-        chrome.permissions.request({ origins: [origin] }, (granted) => {
-          if (!granted) {
-            this.notify(this.i18n.webdav_permission_denied);
-          }
-          resolve(Boolean(granted));
-        });
+        if (!interactive) {
+          chrome.permissions.contains(
+            { origins: [origin] },
+            (hasPermission) => {
+              void chrome.runtime.lastError;
+              resolve(Boolean(hasPermission));
+            }
+          );
+          return;
+        }
+        try {
+          chrome.permissions.request({ origins: [origin] }, (granted) => {
+            const ok = !chrome.runtime.lastError && Boolean(granted);
+            if (!ok) {
+              this.notify(this.i18n.webdav_permission_denied);
+            }
+            resolve(ok);
+          });
+        } catch {
+          this.notify(this.i18n.webdav_permission_denied);
+          resolve(false);
+        }
       });
     },
     getActiveEncryption(): Encryption | null {
@@ -879,11 +1041,14 @@ export default Vue.extend({
       this.$emit("navigate", "WebDAVManagePage");
     },
     formatBytes(bytes: number) {
-      if (!bytes) {
+      if (!Number.isFinite(bytes) || bytes <= 0) {
         return "0 B";
       }
       const sizes = ["B", "KB", "MB", "GB"];
-      const i = Math.floor(Math.log(bytes) / Math.log(1024));
+      const i = Math.min(
+        sizes.length - 1,
+        Math.floor(Math.log(bytes) / Math.log(1024))
+      );
       const value = bytes / Math.pow(1024, i);
       return `${value.toFixed(1)} ${sizes[i]}`;
     },
@@ -897,9 +1062,9 @@ export default Vue.extend({
       );
       this.webdav.restoreProgressLabel = label;
     },
-    updateAutoBackupPreference() {
+    async updateAutoBackupPreference() {
       UserSettings.items.webdavAutoBackup = this.webdav.autoBackup;
-      UserSettings.commitItems();
+      await UserSettings.commitItems();
       this.syncAutoBackupAlarm();
       if (this.webdav.autoBackup) {
         this.runAutoBackupNow();
@@ -913,20 +1078,19 @@ export default Vue.extend({
     hourLabel(hour: number): string {
       return `${String(hour).padStart(2, "0")}:00`;
     },
-    updateBackupHourPreference() {
+    async updateBackupHourPreference() {
       const hour = normalizeBackupHour(this.webdav.backupHour);
       this.webdav.backupHour = hour;
       UserSettings.items.webdavBackupHour = hour;
-      UserSettings.commitItems();
+      await UserSettings.commitItems();
+      this.syncAutoBackupAlarm();
     },
-    updateIntervalPreference() {
+    async updateIntervalPreference() {
       const days = normalizeBackupIntervalDays(this.webdav.intervalDays);
       this.webdav.intervalDays = days;
       UserSettings.items.webdavBackupIntervalDays = days;
-      UserSettings.commitItems();
+      await UserSettings.commitItems();
       this.syncAutoBackupAlarm();
-      // A shorter interval may already be overdue: do not wait for the alarm.
-      this.runAutoBackupNow();
       // A shorter interval may already be overdue: do not wait for the alarm.
       this.runAutoBackupNow();
     },
@@ -961,8 +1125,4 @@ export default Vue.extend({
     },
   },
 });
-
-function getClientDay() {
-  return Math.floor(new Date().getTime() / 1000 / 3600 / 24);
-}
 </script>

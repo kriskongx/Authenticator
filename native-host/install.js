@@ -22,20 +22,37 @@ const BASE_DIR = path.join(os.homedir(), ".authenticator-import");
 const CONFIG_PATH = path.join(BASE_DIR, "config.json");
 const DEFAULT_INBOX = path.join(BASE_DIR, "inbox");
 
-const BROWSER_DIRS = {
-  chrome: path.join(
-    os.homedir(),
-    "Library/Application Support/Google/Chrome/NativeMessagingHosts"
-  ),
-  edge: path.join(
-    os.homedir(),
-    "Library/Application Support/Microsoft Edge/NativeMessagingHosts"
-  ),
-  firefox: path.join(
-    os.homedir(),
-    "Library/Application Support/Mozilla/NativeMessagingHosts"
-  ),
-};
+const BROWSER_DIRS =
+  process.platform === "linux"
+    ? {
+        chrome: path.join(
+          os.homedir(),
+          ".config/google-chrome/NativeMessagingHosts"
+        ),
+        edge: path.join(
+          os.homedir(),
+          ".config/microsoft-edge/NativeMessagingHosts"
+        ),
+        firefox: path.join(os.homedir(), ".mozilla/native-messaging-hosts"),
+      }
+    : {
+        chrome: path.join(
+          os.homedir(),
+          "Library/Application Support/Google/Chrome/NativeMessagingHosts"
+        ),
+        edge: path.join(
+          os.homedir(),
+          "Library/Application Support/Microsoft Edge/NativeMessagingHosts"
+        ),
+        firefox: path.join(
+          os.homedir(),
+          "Library/Application Support/Mozilla/NativeMessagingHosts"
+        ),
+      };
+
+function shQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
 
 function fail(message) {
   process.stderr.write(`${message}\n`);
@@ -65,13 +82,16 @@ function parseArgs(argv) {
 }
 
 function writeRunner(nodePath) {
-  const script = `#!/bin/sh\nexec "${nodePath}" "${HOST_SCRIPT}"\n`;
+  const script = `#!/bin/sh\nexec ${shQuote(nodePath)} ${shQuote(
+    HOST_SCRIPT
+  )}\n`;
   fs.writeFileSync(RUNNER_SCRIPT, script, { mode: 0o755 });
   fs.chmodSync(RUNNER_SCRIPT, 0o755);
 }
 
 function ensureConfig(dir) {
-  fs.mkdirSync(BASE_DIR, { recursive: true });
+  fs.mkdirSync(BASE_DIR, { recursive: true, mode: 0o700 });
+  fs.chmodSync(BASE_DIR, 0o700);
   if (fs.existsSync(CONFIG_PATH)) {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
   }
@@ -82,7 +102,9 @@ function ensureConfig(dir) {
     deleteAfterImport: true,
     intervalMinutes: 5,
   };
-  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
+  fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, {
+    mode: 0o600,
+  });
   return config;
 }
 
@@ -115,7 +137,10 @@ function install(extensionId, dir, nodePath) {
 
   writeRunner(resolvedNode);
   const config = ensureConfig(dir);
-  fs.mkdirSync(config.dir, { recursive: true });
+  fs.mkdirSync(config.dir, { recursive: true, mode: 0o700 });
+  if (path.resolve(config.dir) === path.resolve(DEFAULT_INBOX)) {
+    fs.chmodSync(config.dir, 0o700);
+  }
 
   for (const [browser, browserDir] of Object.entries(BROWSER_DIRS)) {
     fs.mkdirSync(browserDir, { recursive: true });

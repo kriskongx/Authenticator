@@ -1,4 +1,5 @@
-import * as CryptoJS from "crypto-js";
+import AES from "crypto-js/aes";
+import Utf8 from "crypto-js/enc-utf8";
 
 export class Encryption implements EncryptionInterface {
   private password: string;
@@ -13,16 +14,16 @@ export class Encryption implements EncryptionInterface {
     if (!this.password) {
       return data;
     } else {
-      return CryptoJS.AES.encrypt(data, this.password).toString();
+      return AES.encrypt(data, this.password).toString();
     }
   }
 
   decryptSecretString(secret: string) {
+    if (!this.password) {
+      return null;
+    }
     try {
-      const decryptedSecret = CryptoJS.AES.decrypt(
-        secret,
-        this.password
-      ).toString(CryptoJS.enc.Utf8);
+      const decryptedSecret = AES.decrypt(secret, this.password).toString(Utf8);
 
       if (!decryptedSecret) {
         return null;
@@ -49,15 +50,17 @@ export class Encryption implements EncryptionInterface {
   }
 
   decryptEncSecret(entry: OTPEntryInterface) {
+    if (!this.password) {
+      return null;
+    }
     try {
       if (!entry.encData) {
         return null;
       }
 
-      const decryptedData = CryptoJS.AES.decrypt(
-        entry.encData,
-        this.password
-      ).toString(CryptoJS.enc.Utf8);
+      const decryptedData = AES.decrypt(entry.encData, this.password).toString(
+        Utf8
+      );
 
       if (!decryptedData) {
         return null;

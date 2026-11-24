@@ -47,9 +47,38 @@ type PrfOutputs = AuthenticationExtensionsClientOutputs & {
   };
 };
 
-const RECORD_STORAGE_KEY = "AuthenticatorBiometricUnlock";
+export const BIOMETRIC_UNLOCK_STORAGE_KEY = "AuthenticatorBiometricUnlock";
+export const POPUP_ANCHOR_STORAGE_KEY = "AuthenticatorPopupAnchor";
+const RECORD_STORAGE_KEY = BIOMETRIC_UNLOCK_STORAGE_KEY;
+
+export type PopupAnchorOffset = {
+  offsetFromRight: number;
+  offsetFromTop: number;
+};
+
+export function isPopupAnchorOffset(
+  value: unknown
+): value is PopupAnchorOffset {
+  return (
+    isPlainObject(value) &&
+    typeof value.offsetFromRight === "number" &&
+    Number.isFinite(value.offsetFromRight) &&
+    value.offsetFromRight >= 0 &&
+    typeof value.offsetFromTop === "number" &&
+    Number.isFinite(value.offsetFromTop) &&
+    value.offsetFromTop >= 0
+  );
+}
 const PENDING_SETUP_PREFIX = "AuthenticatorBiometricSetup:";
 const AUTO_PROMPT_SKIP_KEY = "AuthenticatorBiometricAutoPromptSkippedUntil";
+const BIOMETRIC_REAUTH_UNTIL_KEY = "biometricReauthVerifiedUntil";
+const BIOMETRIC_REAUTH_KEY_ID_KEY = "biometricReauthKeyId";
+const BIOMETRIC_REAUTH_TTL_MS = 15 * 1000;
+const REOPEN_VIEW_KEY = "biometricReopenView";
+const REOPEN_VIEW_UNTIL_KEY = "biometricReopenViewUntil";
+const REOPEN_NOTIFICATION_KEY = "biometricReopenNotification";
+const REOPEN_NOTIFICATION_UNTIL_KEY = "biometricReopenNotificationUntil";
+const REOPEN_VIEW_TTL_MS = 15 * 1000;
 const AUTO_PROMPT_SKIP_MS = 2 * 60 * 1000;
 const SETUP_LIFETIME_MS = 5 * 60 * 1000;
 const PRF_CONTEXT = new TextEncoder().encode(
@@ -114,6 +143,18 @@ export async function isBiometricUnlockEnabled(): Promise<boolean> {
   return isWebAuthnUnlockRecord(stored[RECORD_STORAGE_KEY]);
 }
 
+/**
+ * Service-worker-safe check for whether a valid biometric unlock record is
+ * stored for this extension (does not require `window` / DOM WebAuthn APIs).
+ */
+export async function hasBiometricUnlockRecord(): Promise<boolean> {
+  if (!isChromium) {
+    return false;
+  }
+  const stored = await chrome.storage.local.get(RECORD_STORAGE_KEY);
+  return isWebAuthnUnlockRecord(stored[RECORD_STORAGE_KEY]);
+}
+
 export async function isPlatformAuthenticatorAvailable(): Promise<boolean> {
   if (!isChromium || !hasWebAuthnSupport()) {
     return false;
@@ -133,11 +174,188 @@ export async function readBiometricUnlockRecord(): Promise<WebAuthnUnlockRecord>
   return record;
 }
 
+let popupBlurSuppressionCount = 0;
+let popupBlurSuppressedUntil = 0;
+
+export function isDetachedPopupWindow(): boolean {
+  if (typeof window === "undefined" || !window.location) {
+    return false;
+  }
+  return new URLSearchParams(window.location.search).get("popup") === "true";
+}
+
+export function isAutoClosePopupWindow(): boolean {
+  if (typeof window === "undefined" || !window.location) {
+    return false;
+  }
+  const params = new URLSearchParams(window.location.search);
+  return params.get("popup") === "true" && params.get("autoClose") === "1";
+}
+
+export function beginPopupBlurSuppression(): void {
+  popupBlurSuppressionCount++;
+}
+
+export function endPopupBlurSuppression(graceMs = 700): void {
+  popupBlurSuppressionCount = Math.max(0, popupBlurSuppressionCount - 1);
+  if (graceMs > 0) {
+    popupBlurSuppressedUntil = Math.max(
+      popupBlurSuppressedUntil,
+      Date.now() + graceMs
+    );
+  }
+}
+
+export function clearPopupBlurGrace(): void {
+  if (popupBlurSuppressionCount === 0) {
+    popupBlurSuppressedUntil = 0;
+  }
+}
+
+export function isPopupBlurSuppressed(): boolean {
+  return popupBlurSuppressionCount > 0 || Date.now() < popupBlurSuppressedUntil;
+}
+
+export async function unlockBiometricBackupKeys(): Promise<
+  Map<string, string>
+> {
+  const record = await readBiometricUnlockRecord();
+  const bundle = await unlockWithBiometricRecord(record);
+  return new Map(bundle.keys.map((item) => [item.id, item.secret]));
+}
+
+export async function markBiometricReauthVerified(
+  keyId: string
+): Promise<void> {
+  if (!keyId) {
+    return;
+  }
+  await chrome.storage.session.set({
+    [BIOMETRIC_REAUTH_UNTIL_KEY]: Date.now() + BIOMETRIC_REAUTH_TTL_MS,
+    [BIOMETRIC_REAUTH_KEY_ID_KEY]: keyId,
+  });
+}
+
+/**
+ * One-shot handoff used only when macOS Chrome dismisses the toolbar popup
+ * right after a genuine Touch ID check on SetPasswordPage and the background
+ * worker immediately reopens it. Never set during normal vault unlock.
+ */
+export async function consumeBiometricReauthVerified(
+  keyId: string | undefined
+): Promise<boolean> {
+  const stored = await chrome.storage.session.get([
+    BIOMETRIC_REAUTH_UNTIL_KEY,
+    BIOMETRIC_REAUTH_KEY_ID_KEY,
+  ]);
+  const until = stored[BIOMETRIC_REAUTH_UNTIL_KEY];
+  const storedKeyId = stored[BIOMETRIC_REAUTH_KEY_ID_KEY];
+  if (until !== undefined || storedKeyId !== undefined) {
+    await chrome.storage.session.remove([
+      BIOMETRIC_REAUTH_UNTIL_KEY,
+      BIOMETRIC_REAUTH_KEY_ID_KEY,
+    ]);
+  }
+  return (
+    Boolean(keyId) &&
+    storedKeyId === keyId &&
+    typeof until === "number" &&
+    until > Date.now()
+  );
+}
+
+export async function clearBiometricReauth(): Promise<void> {
+  await chrome.storage.session.remove([
+    BIOMETRIC_REAUTH_UNTIL_KEY,
+    BIOMETRIC_REAUTH_KEY_ID_KEY,
+    REOPEN_VIEW_KEY,
+    REOPEN_VIEW_UNTIL_KEY,
+    REOPEN_NOTIFICATION_KEY,
+    REOPEN_NOTIFICATION_UNTIL_KEY,
+  ]);
+}
+
+export async function setPendingPopupReopenView(view: string): Promise<void> {
+  if (!view) {
+    return;
+  }
+  await chrome.storage.session.set({
+    [REOPEN_VIEW_KEY]: view,
+    [REOPEN_VIEW_UNTIL_KEY]: Date.now() + REOPEN_VIEW_TTL_MS,
+  });
+}
+
+export async function consumePendingPopupReopenView(): Promise<string | null> {
+  const stored = await chrome.storage.session.get([
+    REOPEN_VIEW_KEY,
+    REOPEN_VIEW_UNTIL_KEY,
+  ]);
+  const view = stored[REOPEN_VIEW_KEY];
+  const until = stored[REOPEN_VIEW_UNTIL_KEY];
+  if (view !== undefined || until !== undefined) {
+    await chrome.storage.session.remove([
+      REOPEN_VIEW_KEY,
+      REOPEN_VIEW_UNTIL_KEY,
+    ]);
+  }
+  if (
+    typeof view === "string" &&
+    typeof until === "number" &&
+    until > Date.now()
+  ) {
+    return view;
+  }
+  return null;
+}
+
+export async function setPendingPopupNotification(
+  messageKey: string
+): Promise<void> {
+  if (!messageKey) {
+    return;
+  }
+  await chrome.storage.session.set({
+    [REOPEN_NOTIFICATION_KEY]: messageKey,
+    [REOPEN_NOTIFICATION_UNTIL_KEY]: Date.now() + REOPEN_VIEW_TTL_MS,
+  });
+}
+
+export async function consumePendingPopupNotification(): Promise<
+  string | null
+> {
+  const stored = await chrome.storage.session.get([
+    REOPEN_NOTIFICATION_KEY,
+    REOPEN_NOTIFICATION_UNTIL_KEY,
+  ]);
+  const messageKey = stored[REOPEN_NOTIFICATION_KEY];
+  const until = stored[REOPEN_NOTIFICATION_UNTIL_KEY];
+  if (messageKey !== undefined || until !== undefined) {
+    await chrome.storage.session.remove([
+      REOPEN_NOTIFICATION_KEY,
+      REOPEN_NOTIFICATION_UNTIL_KEY,
+    ]);
+  }
+  if (
+    typeof messageKey === "string" &&
+    typeof until === "number" &&
+    until > Date.now()
+  ) {
+    return messageKey;
+  }
+  return null;
+}
+
 export async function removeBiometricUnlock(): Promise<void> {
   await chrome.storage.local.remove(RECORD_STORAGE_KEY);
   await chrome.storage.session.remove([
     "cachedBiometricKeys",
     "cachedBiometricDefaultKeyId",
+    BIOMETRIC_REAUTH_UNTIL_KEY,
+    BIOMETRIC_REAUTH_KEY_ID_KEY,
+    REOPEN_VIEW_KEY,
+    REOPEN_VIEW_UNTIL_KEY,
+    REOPEN_NOTIFICATION_KEY,
+    REOPEN_NOTIFICATION_UNTIL_KEY,
   ]);
 }
 export async function invalidateBiometricUnlock(): Promise<void> {
@@ -157,10 +375,26 @@ export async function stageBiometricBundleForCreation(
   if (!isBiometricUnlockBundle(bundle)) {
     throw new Error("biometricUnlockInvalidBundle");
   }
+  const now = Date.now();
+  const session = await chrome.storage.session.get(null);
+  const expiredKeys = Object.keys(session).filter((key) => {
+    if (!key.startsWith(PENDING_SETUP_PREFIX)) {
+      return false;
+    }
+    const item = session[key];
+    return (
+      !isPlainObject(item) ||
+      typeof item.expiresAt !== "number" ||
+      item.expiresAt < now
+    );
+  });
+  if (expiredKeys.length > 0) {
+    await chrome.storage.session.remove(expiredKeys);
+  }
   const ticket = crypto.randomUUID();
   const pending: PendingSetup = {
     ticket,
-    expiresAt: Date.now() + SETUP_LIFETIME_MS,
+    expiresAt: now + SETUP_LIFETIME_MS,
     bundle,
   };
   await chrome.storage.session.set({
@@ -182,7 +416,17 @@ export async function hasStagedBiometricBundle(
   }
   const storageKey = PENDING_SETUP_PREFIX + ticket;
   const stored = await chrome.storage.session.get(storageKey);
-  return isPlainObject(stored[storageKey]);
+  const pending = stored[storageKey];
+  const valid =
+    isPlainObject(pending) &&
+    pending.ticket === ticket &&
+    typeof pending.expiresAt === "number" &&
+    pending.expiresAt >= Date.now() &&
+    isBiometricUnlockBundle(pending.bundle);
+  if (!valid && pending !== undefined) {
+    await chrome.storage.session.remove(storageKey);
+  }
+  return valid;
 }
 
 /**
@@ -212,7 +456,6 @@ export async function finishBiometricCredentialEnrollment(
 ): Promise<void> {
   const storageKey = PENDING_SETUP_PREFIX + ticket;
   const stored = await chrome.storage.session.get(storageKey);
-  await chrome.storage.session.remove(storageKey);
   const pending = stored[storageKey];
   if (
     !isPlainObject(pending) ||
@@ -221,10 +464,14 @@ export async function finishBiometricCredentialEnrollment(
     pending.expiresAt < Date.now() ||
     !isBiometricUnlockBundle(pending.bundle)
   ) {
+    if (pending !== undefined) {
+      await chrome.storage.session.remove(storageKey);
+    }
     throw new Error("biometricSetupExpired");
   }
   await finalizeBiometricCredentialEnrollment(enrollment, pending.bundle);
   await cacheBiometricUnlockBundle(pending.bundle);
+  await chrome.storage.session.remove(storageKey);
 }
 
 export function beginBiometricCredentialEnrollment(): Promise<BiometricCredentialEnrollment> {
@@ -421,20 +668,35 @@ async function evaluateCredentialPrf(
     throw new Error("biometricWebAuthnUnavailable");
   }
   const challenge = randomBytes(32);
-  const credentialPromise = navigator.credentials.get({
-    publicKey: {
-      challenge,
-      allowCredentials: [
-        { type: "public-key", id: decodeBase64Url(credentialId) },
-      ],
-      userVerification: "required",
-      timeout: 60_000,
-      extensions: {
-        prf: { eval: { first: decodeBase64Url(prfSalt) } },
-      } as PrfInputs,
-    } as PublicKeyCredentialRequestOptions,
-  });
-  const credential = await credentialPromise;
+  beginPopupBlurSuppression();
+  let credential: Credential | null;
+  try {
+    const credentialPromise = navigator.credentials.get({
+      publicKey: {
+        challenge,
+        allowCredentials: [
+          { type: "public-key", id: decodeBase64Url(credentialId) },
+        ],
+        userVerification: "required",
+        timeout: 60_000,
+        extensions: {
+          prf: { eval: { first: decodeBase64Url(prfSalt) } },
+        } as PrfInputs,
+      } as PublicKeyCredentialRequestOptions,
+    });
+    credential = await credentialPromise;
+  } finally {
+    endPopupBlurSuppression(700);
+    if (isAutoClosePopupWindow() && chrome.windows?.update) {
+      chrome.windows.update(
+        chrome.windows.WINDOW_ID_CURRENT,
+        { focused: true },
+        () => {
+          void chrome.runtime.lastError;
+        }
+      );
+    }
+  }
   if (!(credential instanceof PublicKeyCredential)) {
     throw new Error("biometricAuthenticationCancelled");
   }

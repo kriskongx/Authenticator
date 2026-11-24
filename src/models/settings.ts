@@ -25,7 +25,10 @@ interface UserSettingsData {
   webdavPassword?: string;
   webdavEncrypted?: boolean;
   webdavAutoBackup?: boolean;
+  /** Day ordinal (local calendar day) the schedule counts from. */
   webdavLastBackupTime?: number;
+  /** Millisecond timestamp of the last *automatic* upload, for display only. */
+  webdavLastAutoBackupAt?: number;
   webdavClearBeforeRestore?: boolean;
   webdavMaxBackups?: number;
   webdavBackupIntervalDays?: number;
@@ -84,6 +87,7 @@ const LocalUserSettingsDataKeys = [
   "webdavEncrypted",
   "webdavAutoBackup",
   "webdavLastBackupTime",
+  "webdavLastAutoBackupAt",
   "webdavClearBeforeRestore",
   "webdavMaxBackups",
   "webdavBackupIntervalDays",
@@ -171,20 +175,15 @@ export class UserSettings {
   }
 
   static async removeItem(key: keyof UserSettingsData) {
-    const localSettings = await UserSettings.getStorageData(
-      StorageLocation.Local
-    );
-    const storageLocation =
-      localSettings.storageLocation || StorageLocation.Local;
+    // Merge over the stored snapshot so edits made in this context (but not
+    // committed yet) are not thrown away by the write-back below.
+    const allItems = {
+      ...(await UserSettings.getAllItems()),
+      ...UserSettings.items,
+    };
+    delete allItems[key];
 
-    const location = LocalUserSettingsDataKeys.includes(key)
-      ? StorageLocation.Local
-      : storageLocation;
-    const storageData: UserSettingsData =
-      (await chrome.storage[location].get("UserSettings"))?.UserSettings || {};
-    delete storageData[key];
-
-    UserSettings.items = storageData;
+    UserSettings.items = allItems;
 
     await UserSettings.commitItems();
   }
@@ -254,6 +253,7 @@ type NumberOption =
   | "offset"
   | "zoom"
   | "webdavLastBackupTime"
+  | "webdavLastAutoBackupAt"
   | "webdavMaxBackups"
   | "webdavBackupIntervalDays"
   | "webdavBackupHour";
@@ -285,6 +285,7 @@ function isNumberOption(key: string): key is NumberOption {
     "offset",
     "zoom",
     "webdavLastBackupTime",
+    "webdavLastAutoBackupAt",
     "webdavMaxBackups",
     "webdavBackupIntervalDays",
     "webdavBackupHour",

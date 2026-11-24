@@ -24,6 +24,7 @@ const DEFAULT_DIR = path.join(BASE_DIR, "inbox");
 const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
 // Chrome rejects host -> browser messages larger than 1 MB, so stay well below.
 const MAX_CHUNK_BYTES = 128 * 1024;
+const MAX_INPUT_MESSAGE_BYTES = 1024 * 1024;
 const MAX_KEPT_ACKS = 20;
 
 function loadConfig() {
@@ -47,7 +48,11 @@ function loadConfig() {
     config.dir = process.env.AUTHENTICATOR_IMPORT_DIR;
   }
   config.dir = path.resolve(config.dir);
-  config.pattern = new RegExp(config.pattern);
+  try {
+    config.pattern = new RegExp(config.pattern);
+  } catch (error) {
+    throw new Error(`configInvalid: ${error.message}`);
+  }
   config.maxBytes = Number(config.maxBytes) || DEFAULT_MAX_BYTES;
   config.intervalMinutes = clampInterval(config.intervalMinutes);
   return config;
@@ -70,9 +75,14 @@ function loadState() {
   }
 }
 
+const OPEN_NOFOLLOW_FLAGS =
+  fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
+
 function saveState(state) {
-  fs.mkdirSync(BASE_DIR, { recursive: true });
-  fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+  fs.mkdirSync(BASE_DIR, { recursive: true, mode: 0o700 });
+  const tempPath = `${STATE_PATH}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(state, null, 2), { mode: 0o600 });
+  fs.renameSync(tempPath, STATE_PATH);
 }
 
 function listBackups(config) {
@@ -94,11 +104,16 @@ function listBackups(config) {
     const fullPath = path.join(config.dir, name);
     let stat;
     try {
-      stat = fs.statSync(fullPath);
+      stat = fs.lstatSync(fullPath);
     } catch {
       continue;
     }
-    if (!stat.isFile() || stat.size === 0 || stat.size > config.maxBytes) {
+    if (
+      stat.isSymbolicLink() ||
+      !stat.isFile() ||
+      stat.size === 0 ||
+      stat.size > config.maxBytes
+    ) {
       continue;
     }
     files.push({ name, size: stat.size, mtime: stat.mtimeMs, fullPath });
@@ -109,9 +124,25 @@ function listBackups(config) {
 }
 
 function digestOf(fullPath) {
-  const hash = crypto.createHash("sha256");
-  hash.update(fs.readFileSync(fullPath));
-  return `sha256:${hash.digest("hex")}`;
+  const fd = fs.openSync(fullPath, OPEN_NOFOLLOW_FLAGS);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) {
+      throw new Error("invalidName");
+    }
+    const hash = crypto.createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    for (;;) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead <= 0) {
+        break;
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+    return `sha256:${hash.digest("hex")}`;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 // How many files a single status call may inspect. The normal case is one
@@ -170,45 +201,65 @@ function pendingBackup(config) {
 function resolveBackupPath(config, name) {
   const requested = String(name || "");
   const safeName = path.basename(requested);
-  if (!safeName || safeName !== requested) {
+  if (!safeName || safeName !== requested || !config.pattern.test(safeName)) {
     throw new Error("invalidName");
   }
   const fullPath = path.join(config.dir, safeName);
-  if (!fs.existsSync(fullPath)) {
-    throw new Error("backupNotFound");
+  let stat;
+  try {
+    stat = fs.lstatSync(fullPath);
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      throw new Error("backupNotFound");
+    }
+    throw error;
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error("invalidName");
+  }
+  if (stat.size > config.maxBytes) {
+    throw new Error("backupTooLarge");
   }
   return { fullPath, safeName };
 }
 
 function readChunk(config, request) {
   const { fullPath, safeName } = resolveBackupPath(config, request.name);
-  const stat = fs.statSync(fullPath);
-  const start = Math.max(
-    0,
-    Math.min(stat.size, Math.floor(Number(request.offset) || 0))
-  );
-  const wanted = Math.floor(Number(request.length) || MAX_CHUNK_BYTES);
-  const length = Math.max(0, Math.min(MAX_CHUNK_BYTES, wanted, stat.size - start));
-
-  const buffer = Buffer.alloc(length);
-  if (length > 0) {
-    const fd = fs.openSync(fullPath, "r");
-    try {
-      fs.readSync(fd, buffer, 0, length, start);
-    } finally {
-      fs.closeSync(fd);
+  const fd = fs.openSync(fullPath, OPEN_NOFOLLOW_FLAGS);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile()) {
+      throw new Error("invalidName");
     }
-  }
+    if (stat.size > config.maxBytes) {
+      throw new Error("backupTooLarge");
+    }
+    const start = Math.max(
+      0,
+      Math.min(stat.size, Math.floor(Number(request.offset) || 0))
+    );
+    const wanted = Math.floor(Number(request.length) || MAX_CHUNK_BYTES);
+    const length = Math.max(
+      0,
+      Math.min(MAX_CHUNK_BYTES, wanted, stat.size - start)
+    );
 
-  return {
-    ok: true,
-    name: safeName,
-    offset: start,
-    total: stat.size,
-    length,
-    eof: start + length >= stat.size,
-    data: buffer.toString("base64"),
-  };
+    const buffer = Buffer.alloc(length);
+    const bytesRead =
+      length > 0 ? fs.readSync(fd, buffer, 0, length, start) : 0;
+
+    return {
+      ok: true,
+      name: safeName,
+      offset: start,
+      total: stat.size,
+      length: bytesRead,
+      eof: bytesRead === 0 || start + bytesRead >= stat.size,
+      data: buffer.subarray(0, bytesRead).toString("base64"),
+    };
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function acknowledge(config, request) {
@@ -219,32 +270,45 @@ function acknowledge(config, request) {
   }
   const state = loadState();
   const imported = state.imported || {};
+  let currentDigest = "";
   let mtime = 0;
   try {
-    mtime = fs.statSync(fullPath).mtimeMs;
+    const stat = fs.lstatSync(fullPath);
+    if (!stat.isSymbolicLink() && stat.isFile()) {
+      mtime = stat.mtimeMs;
+      currentDigest = digestOf(fullPath);
+    }
   } catch {
     mtime = 0;
+    currentDigest = "";
   }
-  imported[safeName] = { digest, mtime };
+  const unchanged = currentDigest === digest;
 
   // Newest wins: every older export is superseded by the one we just imported.
-  // Importing them afterwards would merge stale entries back in, so they are
-  // recorded as already handled (and removed when deletion is enabled).
+  // Only supersede against the acknowledged file's mtime if the file on disk
+  // still matches the imported digest (not a newer replacement).
   const superseded = [];
-  for (const file of listBackups(config)) {
-    if (file.name === safeName || file.mtime >= mtime) {
-      continue;
-    }
-    imported[file.name] = { digest: "", mtime: file.mtime, superseded: true };
-    superseded.push(file.name);
-    if (config.deleteAfterImport !== false) {
-      try {
-        fs.unlinkSync(file.fullPath);
-      } catch (error) {
-        process.stderr.write(`[host] failed to delete ${file.name}: ${error}\n`);
+  if (unchanged && mtime > 0) {
+    for (const file of listBackups(config)) {
+      if (file.name === safeName || file.mtime >= mtime) {
+        continue;
+      }
+      imported[file.name] = { digest: "", mtime: file.mtime, superseded: true };
+      superseded.push(file.name);
+      if (config.deleteAfterImport !== false) {
+        try {
+          fs.unlinkSync(file.fullPath);
+        } catch (error) {
+          process.stderr.write(`[host] failed to delete ${file.name}: ${error}\n`);
+        }
       }
     }
   }
+
+  // Re-insert safeName last so slice(-MAX_KEPT_ACKS) never evicts the newly
+  // acknowledged export when many older files remain on disk.
+  delete imported[safeName];
+  imported[safeName] = { digest, mtime: unchanged ? mtime : 0 };
 
   const entries = Object.entries(imported).slice(-MAX_KEPT_ACKS);
   state.imported = Object.fromEntries(entries);
@@ -255,7 +319,7 @@ function acknowledge(config, request) {
   // Only delete when the file still contains exactly what was imported: if the
   // user replaced it meanwhile, leave it alone so the next tick picks it up.
   let deleted = false;
-  if (config.deleteAfterImport !== false) {
+  if (unchanged && config.deleteAfterImport !== false) {
     try {
       if (digestOf(fullPath) === digest) {
         fs.unlinkSync(fullPath);
@@ -325,6 +389,10 @@ let buffered = Buffer.alloc(0);
 function drain() {
   while (buffered.length >= 4) {
     const length = buffered.readUInt32LE(0);
+    if (length > MAX_INPUT_MESSAGE_BYTES) {
+      respond(null, { ok: false, error: "messageTooLarge" });
+      process.exit(1);
+    }
     if (buffered.length < 4 + length) {
       return;
     }

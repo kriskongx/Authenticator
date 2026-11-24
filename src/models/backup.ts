@@ -3,246 +3,219 @@ import { Encryption } from "./encryption";
 import { UserSettings } from "./settings";
 import { EntryStorage } from "./storage";
 
+/**
+ * `EntryStorage.backupGetExport` refuses to export an encrypted vault while it
+ * is locked. Callers use this to tell "needs unlock" apart from a real failure.
+ */
+export function isVaultLockedError(error: unknown): boolean {
+  return error instanceof Error && error.message === "encryptionRequired";
+}
+
+function isNativeChromeIdentity(): boolean {
+  return (
+    navigator.userAgent.indexOf("Chrome") !== -1 &&
+    navigator.userAgent.indexOf("OPR") === -1 &&
+    navigator.userAgent.indexOf("Edg") === -1
+  );
+}
+
 export class Dropbox implements BackupProvider {
   private async getToken() {
     await UserSettings.updateItems();
     return UserSettings.items.dropboxToken || "";
   }
 
-  async upload(encryption: Encryption) {
+  async upload(encryption: Encryption): Promise<boolean> {
     await UserSettings.updateItems();
 
     if (UserSettings.items.dropboxEncrypted === undefined) {
       // Encrypt by default if user hasn't set yet
       UserSettings.items.dropboxEncrypted = true;
-      UserSettings.commitItems();
+      await UserSettings.commitItems();
     }
-    const exportData = await EntryStorage.backupGetExport(
-      encryption,
-      UserSettings.items.dropboxEncrypted === true
-    );
+    let exportData;
+    try {
+      exportData = await EntryStorage.backupGetExport(
+        encryption,
+        UserSettings.items.dropboxEncrypted === true
+      );
+    } catch (error) {
+      // Never swallow this: the caller reports "locked" vs "failed" from it.
+      console.error("[Dropbox] Unable to build the export:", error);
+      throw error;
+    }
     const backup = JSON.stringify(exportData, null, 2);
 
     const url = "https://content.dropboxapi.com/2/files/upload";
     const token = await this.getToken();
-    return new Promise(
-      (resolve: (value: boolean) => void, reject: (reason: Error) => void) => {
-        if (!token) {
-          return resolve(false);
-        }
-        try {
-          const xhr = new XMLHttpRequest();
-          const now = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-          const apiArg = {
-            path: `/${now}.json`,
-            mode: "add",
-            autorename: true,
-          };
-          xhr.open("POST", url);
-          xhr.setRequestHeader("Authorization", "Bearer " + token);
-          xhr.setRequestHeader("Content-type", "application/octet-stream");
-          xhr.setRequestHeader("Dropbox-API-Arg", JSON.stringify(apiArg));
-          xhr.onreadystatechange = () => {
-            if (xhr.readyState === 4) {
-              if (xhr.status === 401) {
-                UserSettings.items.dropboxToken = undefined;
-                UserSettings.items.dropboxRevoked = true;
-                UserSettings.commitItems();
-                return resolve(false);
-              }
-              try {
-                const res = JSON.parse(xhr.responseText);
-                if (res.name) {
-                  resolve(true);
-                } else {
-                  resolve(false);
-                }
-              } catch (error) {
-                reject(error as Error);
-              }
-            }
-            return;
-          };
-          xhr.send(backup);
-        } catch (error) {
-          return reject(error as Error);
-        }
-      }
-    );
+    if (!token) {
+      return false;
+    }
+
+    const now = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const apiArg = {
+      path: `/${now}.json`,
+      mode: "add",
+      autorename: true,
+    };
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/octet-stream",
+        "Dropbox-API-Arg": JSON.stringify(apiArg),
+      },
+      body: backup,
+    });
+
+    if (response.status === 401) {
+      UserSettings.items.dropboxToken = undefined;
+      UserSettings.items.dropboxRevoked = true;
+      await UserSettings.commitItems();
+      return false;
+    }
+
+    const res = await response.json();
+    return Boolean(res.name);
   }
-  async getUser() {
+
+  async getUser(): Promise<string> {
     await UserSettings.updateItems();
     const url = "https://api.dropboxapi.com/2/users/get_current_account";
     const token = await this.getToken();
-    return new Promise((resolve: (value: string) => void) => {
-      if (!token) {
-        return resolve("Error: No token");
+    if (!token) {
+      return "Error: No token";
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + token,
+        },
+      });
+
+      if (response.status === 401) {
+        UserSettings.items.dropboxToken = undefined;
+        UserSettings.items.dropboxRevoked = true;
+        await UserSettings.commitItems();
+        return "Error: Response was 401. You will be logged out the next time you open Authenticator.";
       }
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", url);
-      xhr.setRequestHeader("Authorization", "Bearer " + token);
-      xhr.onreadystatechange = () => {
-        if (xhr.readyState === 4) {
-          if (xhr.status === 401) {
-            UserSettings.items.dropboxToken = undefined;
-            UserSettings.items.dropboxRevoked = true;
-            UserSettings.commitItems();
-            resolve(
-              "Error: Response was 401. You will be logged out the next time you open Authenticator."
-            );
-          }
-          try {
-            const res = JSON.parse(xhr.responseText);
-            if (res.email) {
-              resolve(res.email);
-            } else {
-              console.error("Could not find email in response.", res);
-              resolve("Error: res.email was undefined.");
-            }
-          } catch (e) {
-            console.error(e);
-            resolve("Error");
-          }
-        }
-        return;
-      };
-      xhr.send(null);
-    });
+
+      const res = await response.json();
+      if (res.email) {
+        return res.email;
+      }
+      console.error("Could not find email in response.", res);
+      return "Error: res.email was undefined.";
+    } catch (e) {
+      console.error(e);
+      return "Error";
+    }
   }
 }
 
 export class Drive implements BackupProvider {
   private async getToken() {
     await UserSettings.updateItems();
-    if (
-      !UserSettings.items.driveToken ||
-      (await new Promise(
-        (
-          resolve: (value: boolean) => void,
-          reject: (reason: Error) => void
-        ) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open("GET", "https://www.googleapis.com/drive/v3/files");
-          xhr.setRequestHeader(
-            "Authorization",
-            "Bearer " + UserSettings.items.driveToken
-          );
-          xhr.onreadystatechange = async () => {
-            if (xhr.readyState === 4) {
-              try {
-                const res = JSON.parse(xhr.responseText);
-                if (res.error) {
-                  if (res.error.code === 401) {
-                    if (
-                      navigator.userAgent.indexOf("Chrome") !== -1 &&
-                      navigator.userAgent.indexOf("OPR") === -1 &&
-                      navigator.userAgent.indexOf("Edg") === -1
-                    ) {
-                      // Clear invalid token from
-                      // chrome://identity-internals/
-                      await chrome.identity.removeCachedAuthToken({
-                        token: UserSettings.items.driveToken as string,
-                      });
-                    }
-                    UserSettings.items.driveToken = undefined;
-                    UserSettings.commitItems();
-                    resolve(true);
-                  }
-                } else {
-                  resolve(false);
-                }
-              } catch (error) {
-                console.error(error);
-                reject(error as Error);
-              }
-            }
-            return;
-          };
-          xhr.send();
+    let needsRefresh = !UserSettings.items.driveToken;
+
+    if (!needsRefresh) {
+      const response = await fetch(
+        "https://www.googleapis.com/drive/v3/files",
+        {
+          method: "GET",
+          headers: {
+            Authorization: "Bearer " + UserSettings.items.driveToken,
+          },
         }
-      ))
-    ) {
+      );
+      const res = await response.json();
+      if (res.error) {
+        if (res.error.code === 401) {
+          if (isNativeChromeIdentity() && UserSettings.items.driveToken) {
+            // Clear invalid token from chrome://identity-internals/
+            await chrome.identity.removeCachedAuthToken({
+              token: UserSettings.items.driveToken,
+            });
+          }
+          UserSettings.items.driveToken = undefined;
+          await UserSettings.commitItems();
+          needsRefresh = true;
+        }
+      }
+    }
+
+    if (needsRefresh) {
       await this.refreshToken();
     }
     return UserSettings.items.driveToken;
   }
 
-  private async refreshToken() {
+  private async refreshToken(): Promise<boolean> {
     await UserSettings.updateItems();
 
-    if (
-      navigator.userAgent.indexOf("Chrome") !== -1 &&
-      navigator.userAgent.indexOf("OPR") === -1 &&
-      navigator.userAgent.indexOf("Edg") === -1
-    ) {
+    if (isNativeChromeIdentity()) {
       return new Promise((resolve: (value: boolean) => void) => {
-        return chrome.identity.getAuthToken(
+        chrome.identity.getAuthToken(
           {
             interactive: false,
             scopes: ["https://www.googleapis.com/auth/drive.file"],
           },
-          (token) => {
+          async (token) => {
             UserSettings.items.driveToken = token;
             if (!token) {
               UserSettings.items.driveRevoked = true;
             }
-            UserSettings.commitItems();
+            try {
+              await UserSettings.commitItems();
+            } catch (error) {
+              console.error("[Drive] Failed to persist token:", error);
+            }
             resolve(Boolean(token));
           }
         );
       });
-    } else {
-      return new Promise(
-        (
-          resolve: (value: boolean) => void,
-          reject: (reason: Error) => void
-        ) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open(
-            "POST",
-            "https://www.googleapis.com/oauth2/v4/token?client_id=" +
-              getCredentials().drive.client_id +
-              "&client_secret=" +
-              getCredentials().drive.client_secret +
-              "&refresh_token=" +
-              UserSettings.items.driveRefreshToken +
-              "&grant_type=refresh_token"
-          );
-          xhr.setRequestHeader("Accept", "application/json");
-          xhr.onreadystatechange = () => {
-            if (xhr.readyState === 4) {
-              if (xhr.status === 401) {
-                UserSettings.items.driveRefreshToken = undefined;
-                UserSettings.items.driveRevoked = true;
-                UserSettings.commitItems();
-                return resolve(false);
-              }
-              try {
-                const res = JSON.parse(xhr.responseText);
-                if (res.error) {
-                  if (res.error === "invalid_grant") {
-                    UserSettings.items.driveRefreshToken = undefined;
-                    UserSettings.items.driveRevoked = true;
-                    UserSettings.commitItems();
-                  }
-                  console.error(res.error_description);
-                  resolve(false);
-                } else {
-                  UserSettings.items.driveToken = res.access_token;
-                  UserSettings.commitItems();
-                  resolve(true);
-                }
-              } catch (error) {
-                console.error(error);
-                reject(error as Error);
-              }
-            }
-            return;
-          };
-          xhr.send();
-        }
-      );
     }
+
+    const tokenBody = new URLSearchParams({
+      client_id: getCredentials().drive.client_id,
+      client_secret: getCredentials().drive.client_secret,
+      refresh_token: UserSettings.items.driveRefreshToken || "",
+      grant_type: "refresh_token",
+    });
+
+    const response = await fetch("https://www.googleapis.com/oauth2/v4/token", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: tokenBody.toString(),
+    });
+
+    if (response.status === 401) {
+      UserSettings.items.driveRefreshToken = undefined;
+      UserSettings.items.driveRevoked = true;
+      await UserSettings.commitItems();
+      return false;
+    }
+
+    const res = await response.json();
+    if (res.error) {
+      if (res.error === "invalid_grant") {
+        UserSettings.items.driveRefreshToken = undefined;
+        UserSettings.items.driveRevoked = true;
+        await UserSettings.commitItems();
+      }
+      console.error(res.error_description);
+      return false;
+    }
+
+    UserSettings.items.driveToken = res.access_token;
+    await UserSettings.commitItems();
+    return true;
   }
 
   private async getFolder() {
@@ -251,115 +224,95 @@ export class Drive implements BackupProvider {
       return false;
     }
     await UserSettings.updateItems();
+
     if (UserSettings.items.driveFolder) {
-      await new Promise(
-        (
-          resolve: (value: boolean) => void,
-          reject: (reason: Error) => void
-        ) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open(
-            "GET",
-            "https://www.googleapis.com/drive/v3/files/" +
-              UserSettings.items.driveFolder +
-              "?fields=trashed"
-          );
-          xhr.setRequestHeader("Authorization", "Bearer " + token);
-          xhr.setRequestHeader("Accept", "application/json");
-          xhr.onreadystatechange = () => {
-            if (xhr.readyState === 4) {
-              if (xhr.status === 401) {
-                UserSettings.items.driveToken = undefined;
-                UserSettings.commitItems();
-                return resolve(false);
-              }
-              try {
-                const res = JSON.parse(xhr.responseText);
-                if (res.error) {
-                  if (res.error.code === 404) {
-                    UserSettings.items.driveFolder = undefined;
-                    UserSettings.commitItems();
-                    resolve(true);
-                  } else {
-                    console.error(res.error.message);
-                    resolve(false);
-                  }
-                } else if (res.trashed) {
-                  UserSettings.items.driveFolder = undefined;
-                  UserSettings.commitItems();
-                  resolve(true);
-                } else {
-                  resolve(true);
-                }
-              } catch (error) {
-                console.error(error);
-                reject(error as Error);
-              }
-            }
-            return;
-          };
-          xhr.send();
+      const response = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(
+          UserSettings.items.driveFolder
+        )}?fields=trashed`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: "Bearer " + token,
+            Accept: "application/json",
+          },
         }
       );
+
+      if (response.status === 401) {
+        UserSettings.items.driveToken = undefined;
+        await UserSettings.commitItems();
+        return false;
+      }
+
+      const res = await response.json();
+      if (res.error) {
+        if (res.error.code === 404) {
+          UserSettings.items.driveFolder = undefined;
+          await UserSettings.commitItems();
+        } else {
+          console.error(res.error.message);
+          return false;
+        }
+      } else if (res.trashed) {
+        UserSettings.items.driveFolder = undefined;
+        await UserSettings.commitItems();
+      }
     }
+
     if (!UserSettings.items.driveFolder) {
-      await new Promise(
-        (
-          resolve: (value: boolean) => void,
-          reject: (reason: Error) => void
-        ) => {
-          // create folder
-          const xhr = new XMLHttpRequest();
-          xhr.open("POST", "https://www.googleapis.com/drive/v3/files/");
-          xhr.setRequestHeader("Authorization", "Bearer " + token);
-          xhr.setRequestHeader("Accept", "application/json");
-          xhr.setRequestHeader("Content-Type", "application/json");
-          xhr.onreadystatechange = () => {
-            if (xhr.readyState === 4) {
-              if (xhr.status === 401) {
-                UserSettings.items.driveToken = undefined;
-                UserSettings.commitItems();
-                return resolve(false);
-              }
-              try {
-                const res = JSON.parse(xhr.responseText);
-                if (!res.error) {
-                  UserSettings.items.driveFolder = res.id;
-                  UserSettings.commitItems();
-                  resolve(true);
-                } else {
-                  console.error(res.error.message);
-                  resolve(false);
-                }
-              } catch (error) {
-                console.error(error);
-                reject(error as Error);
-              }
-            }
-            return;
-          };
-          xhr.send(
-            JSON.stringify({
-              name: "Authenticator Backups",
-              mimeType: "application/vnd.google-apps.folder",
-            })
-          );
+      const response = await fetch(
+        "https://www.googleapis.com/drive/v3/files/",
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + token,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            name: "Authenticator Backups",
+            mimeType: "application/vnd.google-apps.folder",
+          }),
         }
       );
+
+      if (response.status === 401) {
+        UserSettings.items.driveToken = undefined;
+        await UserSettings.commitItems();
+        return false;
+      }
+
+      const res = await response.json();
+      if (!res.error) {
+        UserSettings.items.driveFolder = res.id;
+        await UserSettings.commitItems();
+      } else {
+        console.error(res.error.message);
+        return false;
+      }
     }
+
     return UserSettings.items.driveFolder;
   }
 
-  async upload(encryption: Encryption) {
+  async upload(encryption: Encryption): Promise<boolean> {
     await UserSettings.updateItems();
     if (UserSettings.items.driveEncrypted === undefined) {
       UserSettings.items.driveEncrypted = true;
-      UserSettings.commitItems();
+      await UserSettings.commitItems();
     }
-    const exportData = await EntryStorage.backupGetExport(
-      encryption,
-      UserSettings.items.driveEncrypted === true
-    );
+    let exportData;
+    try {
+      exportData = await EntryStorage.backupGetExport(
+        encryption,
+        UserSettings.items.driveEncrypted === true
+      );
+    } catch (error) {
+      // Never swallow this: the caller reports "locked" vs "failed" from it.
+      console.error("[Drive] Unable to build the export:", error);
+      throw error;
+    }
     const backup = JSON.stringify(exportData, null, 2);
 
     const token = await this.getToken();
@@ -367,227 +320,183 @@ export class Drive implements BackupProvider {
       return false;
     }
     const folderId = await this.getFolder();
-    return new Promise(
-      (resolve: (value: boolean) => void, reject: (reason: Error) => void) => {
-        if (!token || !folderId) {
-          return resolve(false);
-        }
-        try {
-          const xhr = new XMLHttpRequest();
-          const now = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-          xhr.open(
-            "POST",
-            "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
-          );
-          xhr.setRequestHeader("Authorization", "Bearer " + token);
-          xhr.setRequestHeader(
-            "Content-type",
-            "multipart/related; boundary=segment_marker"
-          );
-          xhr.onreadystatechange = () => {
-            if (xhr.readyState === 4) {
-              if (xhr.status === 401) {
-                UserSettings.items.driveToken = undefined;
-                UserSettings.commitItems();
-                return resolve(false);
-              }
-              try {
-                const res = JSON.parse(xhr.responseText);
-                if (!res.error) {
-                  resolve(true);
-                } else {
-                  console.error(res.error.message);
-                  resolve(false);
-                }
-              } catch (error) {
-                reject(error as Error);
-              }
-            }
-            return;
-          };
-          const requestDataPrototype = [
-            "--segment_marker",
-            "Content-Type: application/json; charset=UTF-8",
-            "",
-            JSON.stringify({
-              name: `${now}.json`,
-              parents: [UserSettings.items.driveFolder],
-            }),
-            "",
-            "--segment_marker",
-            "Content-Type: application/octet-stream",
-            "",
-            backup,
-            "--segment_marker--",
-          ];
-          let requestData = "";
-          requestDataPrototype.forEach((line) => {
-            requestData = requestData + line + "\n";
-          });
-          xhr.send(requestData);
-        } catch (error) {
-          return reject(error as Error);
-        }
+    if (!folderId) {
+      return false;
+    }
+
+    const now = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const requestData = [
+      "--segment_marker",
+      "Content-Type: application/json; charset=UTF-8",
+      "",
+      JSON.stringify({
+        name: `${now}.json`,
+        parents: [folderId],
+      }),
+      "",
+      "--segment_marker",
+      "Content-Type: application/octet-stream",
+      "",
+      backup,
+      "--segment_marker--",
+      "",
+    ].join("\n");
+
+    const response = await fetch(
+      "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + token,
+          "Content-Type": "multipart/related; boundary=segment_marker",
+        },
+        body: requestData,
       }
     );
+
+    if (response.status === 401) {
+      UserSettings.items.driveToken = undefined;
+      await UserSettings.commitItems();
+      return false;
+    }
+
+    const res = await response.json();
+    if (!res.error) {
+      return true;
+    }
+    console.error(res.error.message);
+    return false;
   }
 
-  async getUser() {
+  async getUser(): Promise<string> {
     const token = await this.getToken();
     if (!token) {
       return "Error: Access revoked or expired.";
     }
 
     await UserSettings.updateItems();
-    return new Promise((resolve: (value: string) => void) => {
-      if (!token) {
-        resolve("Error: Access revoked or expired.");
-      }
-      const xhr = new XMLHttpRequest();
-      xhr.open("GET", "https://www.googleapis.com/drive/v2/about?fields=user");
-      xhr.setRequestHeader("Authorization", "Bearer " + token);
-      xhr.onreadystatechange = () => {
-        if (xhr.readyState === 4) {
-          if (xhr.status === 401) {
-            UserSettings.items.driveToken = undefined;
-            UserSettings.commitItems();
-            resolve(
-              "Error: Response was 401. You will be logged out the next time you open Authenticator."
-            );
-          }
-          try {
-            const res = JSON.parse(xhr.responseText);
-            if (!res.error) {
-              resolve(res.user.emailAddress);
-            } else {
-              console.error(res.error.message);
-              resolve("Error");
-            }
-          } catch (e) {
-            console.error(e);
-            resolve("Error");
-          }
+    try {
+      const response = await fetch(
+        "https://www.googleapis.com/drive/v2/about?fields=user",
+        {
+          method: "GET",
+          headers: {
+            Authorization: "Bearer " + token,
+          },
         }
-        return;
-      };
-      xhr.send();
-    });
+      );
+
+      if (response.status === 401) {
+        UserSettings.items.driveToken = undefined;
+        await UserSettings.commitItems();
+        return "Error: Response was 401. You will be logged out the next time you open Authenticator.";
+      }
+
+      const res = await response.json();
+      if (!res.error) {
+        return res.user.emailAddress;
+      }
+      console.error(res.error.message);
+      return "Error";
+    } catch (e) {
+      console.error(e);
+      return "Error";
+    }
   }
 }
 
 export class OneDrive implements BackupProvider {
   private async getToken() {
     await UserSettings.updateItems();
-    if (
-      !UserSettings.items.oneDriveToken ||
-      (await new Promise(
-        (
-          resolve: (value: boolean) => void,
-          reject: (reason: Error) => void
-        ) => {
-          const xhr = new XMLHttpRequest();
-          xhr.open(
-            "GET",
-            "https://graph.microsoft.com/v1.0/me/drive/special/approot"
-          );
-          xhr.setRequestHeader(
-            "Authorization",
-            "Bearer " + UserSettings.items.oneDriveToken
-          );
-          xhr.onreadystatechange = async () => {
-            if (xhr.readyState === 4) {
-              try {
-                const res = JSON.parse(xhr.responseText);
-                if (res.error) {
-                  if (res.error.code === 401) {
-                    UserSettings.items.oneDriveToken = undefined;
-                    UserSettings.commitItems();
-                    resolve(true);
-                  }
-                } else {
-                  resolve(false);
-                }
-              } catch (error) {
-                console.error(error);
-                reject(error as Error);
-              }
-            }
-            return;
-          };
-          xhr.send();
+    let needsRefresh = !UserSettings.items.oneDriveToken;
+
+    if (!needsRefresh) {
+      const response = await fetch(
+        "https://graph.microsoft.com/v1.0/me/drive/special/approot",
+        {
+          method: "GET",
+          headers: {
+            Authorization: "Bearer " + UserSettings.items.oneDriveToken,
+          },
         }
-      ))
-    ) {
+      );
+      const res = await response.json();
+      if (res.error && (response.status === 401 || res.error.code === 401)) {
+        UserSettings.items.oneDriveToken = undefined;
+        await UserSettings.commitItems();
+        needsRefresh = true;
+      }
+    }
+
+    if (needsRefresh) {
       await this.refreshToken();
     }
     return UserSettings.items.oneDriveToken;
   }
 
-  private async refreshToken() {
+  private async refreshToken(): Promise<boolean> {
     await UserSettings.updateItems();
-    return new Promise(
-      (resolve: (value: boolean) => void, reject: (reason: Error) => void) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open(
-          "POST",
-          "https://login.microsoftonline.com/common/oauth2/v2.0/token"
-        );
-        xhr.setRequestHeader(
-          "Content-Type",
-          "application/x-www-form-urlencoded"
-        );
-        xhr.onreadystatechange = () => {
-          if (xhr.readyState === 4) {
-            if (xhr.status === 401) {
-              UserSettings.items.oneDriveRefreshToken = undefined;
-              UserSettings.items.oneDriveRevoked = true;
-              UserSettings.commitItems();
-              return resolve(false);
-            }
-            try {
-              const res = JSON.parse(xhr.responseText);
-              if (res.error) {
-                if (res.error === "invalid_grant") {
-                  UserSettings.items.oneDriveRefreshToken = undefined;
-                  UserSettings.items.oneDriveRevoked = true;
-                  UserSettings.commitItems();
-                }
-                console.error(res.error_description);
-                resolve(false);
-              } else {
-                UserSettings.items.oneDriveToken = res.access_token;
-                UserSettings.commitItems();
-                resolve(true);
-              }
-            } catch (error) {
-              console.error(error);
-              reject(error as Error);
-            }
-          }
-          return;
-        };
-        xhr.send(
-          `client_id=${getCredentials().onedrive.client_id}&refresh_token=${
-            UserSettings.items.oneDriveRefreshToken
-          }&client_secret=${encodeURIComponent(
-            getCredentials().onedrive.client_secret
-          )}&grant_type=refresh_token&scope=https%3A%2F%2Fgraph.microsoft.com%2FFiles.ReadWrite${
-            UserSettings.items.oneDriveBusiness !== true ? ".AppFolder" : ""
-          }%20https%3A%2F%2Fgraph.microsoft.com%2FUser.Read%20offline_access`
-        );
+    const tokenBody = new URLSearchParams({
+      client_id: getCredentials().onedrive.client_id,
+      refresh_token: UserSettings.items.oneDriveRefreshToken || "",
+      client_secret: getCredentials().onedrive.client_secret,
+      grant_type: "refresh_token",
+      scope: `https://graph.microsoft.com/Files.ReadWrite${
+        UserSettings.items.oneDriveBusiness !== true ? ".AppFolder" : ""
+      } https://graph.microsoft.com/User.Read offline_access`,
+    });
+
+    const response = await fetch(
+      "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: tokenBody.toString(),
       }
     );
+
+    if (response.status === 401) {
+      UserSettings.items.oneDriveRefreshToken = undefined;
+      UserSettings.items.oneDriveRevoked = true;
+      await UserSettings.commitItems();
+      return false;
+    }
+
+    const res = await response.json();
+    if (res.error) {
+      if (res.error === "invalid_grant") {
+        UserSettings.items.oneDriveRefreshToken = undefined;
+        UserSettings.items.oneDriveRevoked = true;
+        await UserSettings.commitItems();
+      }
+      console.error(res.error_description);
+      return false;
+    }
+
+    UserSettings.items.oneDriveToken = res.access_token;
+    await UserSettings.commitItems();
+    return true;
   }
 
-  async upload(encryption: Encryption) {
+  async upload(encryption: Encryption): Promise<boolean> {
     await UserSettings.updateItems();
     if (UserSettings.items.oneDriveEncrypted === undefined) {
       UserSettings.items.oneDriveEncrypted = true;
+      await UserSettings.commitItems();
     }
-    const exportData = await EntryStorage.backupGetExport(
-      encryption,
-      UserSettings.items.oneDriveEncrypted === true
-    );
+    let exportData;
+    try {
+      exportData = await EntryStorage.backupGetExport(
+        encryption,
+        UserSettings.items.oneDriveEncrypted === true
+      );
+    } catch (error) {
+      // Never swallow this: the caller reports "locked" vs "failed" from it.
+      console.error("[OneDrive] Unable to build the export:", error);
+      throw error;
+    }
     const backup = JSON.stringify(exportData, null, 2);
 
     const token = await this.getToken();
@@ -595,85 +504,62 @@ export class OneDrive implements BackupProvider {
       return false;
     }
 
-    return new Promise(
-      (resolve: (value: boolean) => void, reject: (reason: Error) => void) => {
-        if (!token) {
-          return resolve(false);
-        }
-        try {
-          const xhr = new XMLHttpRequest();
-          const now = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-          xhr.open(
-            "PUT",
-            `https://graph.microsoft.com/v1.0/me/drive/special/approot:/${now}.json:/content`
-          );
-          xhr.setRequestHeader("Authorization", "Bearer " + token);
-          xhr.setRequestHeader("Content-type", "application/octet-stream");
-          xhr.onreadystatechange = () => {
-            if (xhr.readyState === 4) {
-              if (xhr.status === 401) {
-                UserSettings.removeItem("oneDriveToken");
-                return resolve(false);
-              }
-              try {
-                const res = JSON.parse(xhr.responseText);
-                if (!res.error) {
-                  resolve(true);
-                } else {
-                  console.error(res.error.message);
-                  resolve(false);
-                }
-              } catch (error) {
-                reject(error as Error);
-              }
-            }
-            return;
-          };
-          xhr.send(backup);
-        } catch (error) {
-          return reject(error as Error);
-        }
+    const now = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const response = await fetch(
+      `https://graph.microsoft.com/v1.0/me/drive/special/approot:/${now}.json:/content`,
+      {
+        method: "PUT",
+        headers: {
+          Authorization: "Bearer " + token,
+          "Content-Type": "application/octet-stream",
+        },
+        body: backup,
       }
     );
+
+    if (response.status === 401) {
+      await UserSettings.removeItem("oneDriveToken");
+      return false;
+    }
+
+    const res = await response.json();
+    if (!res.error) {
+      return true;
+    }
+    console.error(res.error.message);
+    return false;
   }
 
-  async getUser() {
+  async getUser(): Promise<string> {
     const token = await this.getToken();
     if (!token) {
       return "Error: Access revoked or expired.";
     }
 
     await UserSettings.updateItems();
+    try {
+      const response = await fetch("https://graph.microsoft.com/v1.0/me/", {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer " + token,
+        },
+      });
 
-    return new Promise((resolve: (value: string) => void) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("GET", "https://graph.microsoft.com/v1.0/me/");
-      xhr.setRequestHeader("Authorization", "Bearer " + token);
-      xhr.onreadystatechange = () => {
-        if (xhr.readyState === 4) {
-          if (xhr.status === 401) {
-            UserSettings.items.oneDriveToken = undefined;
-            UserSettings.commitItems();
-            resolve(
-              "Error: Response was 401. You will be logged out the next time you open Authenticator."
-            );
-          }
-          try {
-            const res = JSON.parse(xhr.responseText);
-            if (!res.error) {
-              resolve(res.userPrincipalName);
-            } else {
-              console.error(res.error.message);
-              resolve("Error");
-            }
-          } catch (e) {
-            console.error(e);
-            resolve("Error");
-          }
-        }
-        return;
-      };
-      xhr.send();
-    });
+      if (response.status === 401) {
+        UserSettings.items.oneDriveToken = undefined;
+        await UserSettings.commitItems();
+        return "Error: Response was 401. You will be logged out the next time you open Authenticator.";
+      }
+
+      const res = await response.json();
+      if (!res.error) {
+        return res.userPrincipalName;
+      }
+      console.error(res.error.message);
+      return "Error";
+    } catch (e) {
+      console.error(e);
+      return "Error";
+    }
   }
 }

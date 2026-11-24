@@ -148,12 +148,15 @@
         </div>
         <label class="subpage-field">
           <span class="subpage-field-label">{{ i18n.phrase }}</span>
-          <input
+          <a-password-input
             ref="passphrase"
-            class="subpage-text-input"
-            type="password"
+            input-class="subpage-text-input"
             v-model="passphrase"
             autocomplete="current-password"
+            :biometric="biometricEnabled"
+            :biometric-disabled="biometricBusy"
+            :biometric-title="i18n.biometric_decrypt_backup"
+            @biometric="unlockPassphraseWithBiometrics"
           />
         </label>
         <div class="subpage-actions">
@@ -164,7 +167,11 @@
           >
             {{ i18n.cancel }}
           </button>
-          <button type="submit" class="subpage-button primary">
+          <button
+            type="submit"
+            class="subpage-button primary"
+            :disabled="!passphrase"
+          >
             {{ i18n.ok }}
           </button>
         </div>
@@ -177,7 +184,15 @@ import Vue from "vue";
 import IconArrowLeft from "../../../svg/arrow-left.svg";
 import IconSync from "../../../svg/sync.svg";
 import { MAX_BACKUP_CONTENT_BYTES } from "../../models/import-limits";
-import { restoreBackupContent } from "../../models/backup-restore";
+import {
+  type BackupPassphraseResult,
+  restoreBackupContent,
+} from "../../models/backup-restore";
+import {
+  isBiometricUnlockEnabled,
+  isDetachedPopupWindow,
+  unlockBiometricBackupKeys,
+} from "../../models/biometric-unlock";
 import { UserSettings } from "../../models/settings";
 import {
   downloadWebDAVBackup,
@@ -202,20 +217,44 @@ export default Vue.extend({
       clearBeforeRestore: false,
       passphraseOpen: false,
       passphrase: "",
-      passphraseResolver: null as ((value: string | null) => void) | null,
+      passphraseResolver: null as
+        | ((value: BackupPassphraseResult) => void)
+        | null,
+      biometricEnabled: false,
+      biometricBusy: false,
+      restoreAbortController: null as AbortController | null,
+      cachedOrigin: "",
+      pendingRestorePayload: null as {
+        content: string;
+        clearFirst: boolean;
+      } | null,
     };
   },
+  beforeDestroy() {
+    this.restoreAbortController?.abort();
+    this.restoreAbortController = null;
+    this.cancelPassphrase();
+  },
   async created() {
+    void isBiometricUnlockEnabled()
+      .then((enabled) => {
+        this.biometricEnabled = enabled;
+      })
+      .catch(() => {
+        this.biometricEnabled = false;
+      });
     this.clearBeforeRestore = Boolean(
       UserSettings.items.webdavClearBeforeRestore
     );
     const config = await getWebDAVConfig();
-    if (!config.url || !config.username || !config.password) {
+    const origin = getWebDAVOrigin(config.url);
+    this.cachedOrigin = origin;
+    if (!config.url || !config.username || !config.password || !origin) {
       this.needsSetup = true;
       return;
     }
     if (await this.ensurePermission(false)) {
-      await this.loadFiles();
+      await this.loadFiles(false);
     } else {
       this.needsPermission = true;
     }
@@ -257,43 +296,60 @@ export default Vue.extend({
       return parts.join(" · ");
     },
     formatBytes(bytes: number): string {
+      if (!Number.isFinite(bytes) || bytes <= 0) {
+        return "0 B";
+      }
       const sizes = ["B", "KB", "MB", "GB"];
-      const index = Math.floor(Math.log(bytes) / Math.log(1024));
+      const index = Math.min(
+        sizes.length - 1,
+        Math.floor(Math.log(bytes) / Math.log(1024))
+      );
       const value = bytes / Math.pow(1024, index);
       return `${value.toFixed(1)} ${sizes[index]}`;
     },
-    async ensurePermission(interactive = true): Promise<boolean> {
-      const config = await getWebDAVConfig();
-      const origin = getWebDAVOrigin(config.url);
+    ensurePermission(interactive = true): Promise<boolean> {
+      const origin = this.cachedOrigin;
       if (!origin) {
-        if (interactive) {
-          this.notify(this.i18n.webdav_invalid_url);
+        return getWebDAVConfig().then((config) => {
+          const resolvedOrigin = getWebDAVOrigin(config.url);
+          this.cachedOrigin = resolvedOrigin;
+          if (!resolvedOrigin) {
+            this.needsSetup = true;
+            if (interactive) {
+              this.notify(this.i18n.webdav_invalid_url);
+            }
+            return false;
+          }
+          return this.requestOriginPermission(resolvedOrigin, interactive);
+        });
+      }
+      return this.requestOriginPermission(origin, interactive);
+    },
+    requestOriginPermission(
+      origin: string,
+      interactive: boolean
+    ): Promise<boolean> {
+      return new Promise<boolean>((resolve) => {
+        if (!interactive) {
+          chrome.permissions.contains({ origins: [origin] }, (granted) => {
+            void chrome.runtime.lastError;
+            resolve(Boolean(granted));
+          });
+          return;
         }
-        return false;
-      }
-      const contained = await new Promise<boolean>((resolve) => {
-        chrome.permissions.contains({ origins: [origin] }, (granted) =>
-          resolve(Boolean(granted))
-        );
-      });
-      if (contained || !interactive) {
-        return contained;
-      }
-      // chrome.permissions.request needs a user gesture, so this branch only
-      // runs from a click handler.
-      const granted = await new Promise<boolean>((resolve) => {
         try {
-          chrome.permissions.request({ origins: [origin] }, (result) =>
-            resolve(Boolean(result))
-          );
+          chrome.permissions.request({ origins: [origin] }, (result) => {
+            const ok = !chrome.runtime.lastError && Boolean(result);
+            if (!ok) {
+              this.notify(this.i18n.webdav_permission_denied);
+            }
+            resolve(ok);
+          });
         } catch {
+          this.notify(this.i18n.webdav_permission_denied);
           resolve(false);
         }
       });
-      if (!granted) {
-        this.notify(this.i18n.webdav_permission_denied);
-      }
-      return granted;
     },
     openSetup() {
       this.$store.commit("style/closeCloudRestore");
@@ -302,17 +358,17 @@ export default Vue.extend({
     async grantAccess() {
       if (await this.ensurePermission(true)) {
         this.needsPermission = false;
-        await this.loadFiles();
+        await this.loadFiles(false);
       }
     },
-    async loadFiles() {
+    async loadFiles(interactive = true) {
       if (this.loading) {
         return;
       }
       this.loading = true;
       try {
-        if (!(await this.ensurePermission(true))) {
-          this.needsPermission = true;
+        if (!(await this.ensurePermission(interactive))) {
+          this.needsPermission = !this.needsSetup;
           return;
         }
         this.needsPermission = false;
@@ -352,10 +408,13 @@ export default Vue.extend({
       this.restoring = true;
       this.restoreProgress = 2;
       this.restoreLabel = this.i18n.ui_progress_downloading_backup;
+      const controller = new AbortController();
+      this.restoreAbortController = controller;
       try {
         // The list is only visible with permission already granted, so no
         // gesture-dependent permission prompt is needed here.
         const content = await downloadWebDAVBackup(file.name, {
+          signal: controller.signal,
           onDownloadProgress: (loadedBytes, totalBytes) => {
             const ratio = totalBytes
               ? loadedBytes / totalBytes
@@ -366,10 +425,15 @@ export default Vue.extend({
             );
           },
         });
-        await restoreBackupContent({
+        this.pendingRestorePayload = {
+          content,
+          clearFirst: this.clearBeforeRestore,
+        };
+        const result = await restoreBackupContent({
           content,
           encryption,
           clearFirst: this.clearBeforeRestore,
+          signal: controller.signal,
           requestPassphrase: () => this.askPassphrase(),
           onProgress: (value, key) => {
             this.restoreProgress = Math.max(
@@ -385,14 +449,24 @@ export default Vue.extend({
         });
         this.restoreProgress = 100;
         this.restoreLabel = this.i18n.webdav_restore_success;
-        this.notify(this.i18n.webdav_restore_success);
+        if (result.failedCount > 0 && result.succeededCount === 0) {
+          this.notify(this.i18n.migration_fail);
+        } else if (result.failedCount > 0) {
+          this.notify(this.i18n.migration_partly_fail);
+        } else {
+          this.notify(this.i18n.webdav_restore_success);
+        }
         this.$emit("restored", file.name);
       } catch (error) {
         const message = (error as Error).message;
         if (message === "cancelled") {
           this.notify(this.i18n.webdav_restore_cancelled);
+        } else if (message === "vaultLocked") {
+          this.notify(this.i18n.import_error_password);
         } else if (message === "incorrectPassphrase") {
           this.notify(this.i18n.ui_incorrect_backup_password);
+        } else if (message === "biometricBackupKeyMismatch") {
+          this.notify(this.i18n.biometric_backup_key_mismatch);
         } else if (message === "parseError" || message === "noImportableEntries") {
           this.notify(this.i18n.webdav_restore_parse_error);
         } else if (message === "backupContentTooLarge") {
@@ -403,30 +477,107 @@ export default Vue.extend({
           this.notify(this.i18n.webdav_restore_failure);
         }
       } finally {
+        if (this.restoreAbortController === controller) {
+          this.restoreAbortController = null;
+        }
         this.restoring = false;
         this.pendingFile = null;
+        this.pendingRestorePayload = null;
       }
     },
-    askPassphrase(): Promise<string | null> {
+    askPassphrase(): Promise<BackupPassphraseResult> {
       this.passphrase = "";
       this.passphraseOpen = true;
       this.$nextTick(() => {
-        const input = this.$refs.passphrase as HTMLInputElement | undefined;
-        input?.focus();
+        const input = this.$refs.passphrase as
+          | { focus?: () => void }
+          | undefined;
+        input?.focus?.();
       });
       return new Promise((resolve) => {
         this.passphraseResolver = resolve;
       });
     },
+    async unlockPassphraseWithBiometrics() {
+      if (
+        !this.biometricEnabled ||
+        this.biometricBusy ||
+        !this.passphraseResolver
+      ) {
+        return;
+      }
+      this.biometricBusy = true;
+      try {
+        const preUnlockedKeys = await unlockBiometricBackupKeys();
+        if (!isDetachedPopupWindow() && this.pendingRestorePayload) {
+          const response = await this.completeBiometricBackupRestore(
+            this.pendingRestorePayload.content,
+            this.pendingRestorePayload.clearFirst,
+            preUnlockedKeys
+          );
+          if (!response.ok) {
+            if (response.error?.includes("biometricBackupKeyMismatch")) {
+              this.notify(this.i18n.biometric_backup_key_mismatch);
+              return;
+            }
+            throw new Error(response.error || "webdav_restore_failure");
+          }
+          const resolver = this.passphraseResolver;
+          this.passphraseResolver = null;
+          this.passphraseOpen = false;
+          this.passphrase = "";
+          resolver?.({ handledInBackground: true });
+          return;
+        }
+        const resolver = this.passphraseResolver;
+        this.passphraseResolver = null;
+        this.passphraseOpen = false;
+        this.passphrase = "";
+        resolver?.({ preUnlockedKeys });
+      } catch (error) {
+        const notAllowed =
+          error instanceof Error && error.name === "NotAllowedError";
+        this.notify(
+          notAllowed
+            ? this.i18n.biometric_unlock_cancelled
+            : this.i18n.biometric_unlock_failed
+        );
+      } finally {
+        this.biometricBusy = false;
+      }
+    },
+    completeBiometricBackupRestore(
+      content: string,
+      clearFirst: boolean,
+      preUnlockedKeys: Map<string, string>
+    ): Promise<{ ok: boolean; error?: string }> {
+      return new Promise((resolve) => {
+        chrome.runtime.sendMessage(
+          {
+            action: "completeBiometricBackupRestore",
+            content,
+            clearFirst,
+            preUnlockedKeys: Array.from(preUnlockedKeys.entries()).map(
+              ([id, secret]) => ({ id, secret })
+            ),
+            reopenPopup: true,
+          },
+          (response?: { ok?: boolean; error?: string }) => {
+            if (chrome.runtime.lastError) {
+              resolve({ ok: false, error: chrome.runtime.lastError.message });
+              return;
+            }
+            resolve({ ok: response?.ok === true, error: response?.error });
+          }
+        );
+      });
+    },
     submitPassphrase() {
       const resolver = this.passphraseResolver;
-      if (!resolver) {
+      if (!resolver || !this.passphrase) {
         return;
       }
-      const value = this.passphrase.trim();
-      if (!value) {
-        return;
-      }
+      const value = this.passphrase;
       this.passphraseResolver = null;
       this.passphraseOpen = false;
       this.passphrase = "";

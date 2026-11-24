@@ -21,6 +21,10 @@
       <a-text-input
         :label="i18n.phrase"
         type="password"
+        :biometric="biometricEnabled"
+        :biometric-disabled="biometricBusy"
+        :biometric-title="i18n.biometric_decrypt_backup"
+        @biometric="unlockFilePassphraseWithBiometrics"
         @enter="submitFilePassphrase"
         v-model="importFilePassphrase"
       />
@@ -44,6 +48,11 @@
   </div>
 </template>
 <script lang="ts">
+import type { BackupPassphraseResult } from "../../models/backup-restore";
+import {
+  isBiometricUnlockEnabled,
+  unlockBiometricBackupKeys,
+} from "../../models/biometric-unlock";
 import { Encryption } from "../../models/encryption";
 import { MAX_BACKUP_CONTENT_BYTES } from "../../models/import-limits";
 import {
@@ -59,10 +68,21 @@ export default ImportFeedbackMixin.extend({
       getFilePassphrase: false,
       importFilePassphrase: "",
       filePassphraseResolver: null as
-        | ((passphrase: string | null) => void)
+        | ((passphrase: BackupPassphraseResult) => void)
         | null,
       clearBeforeImport: false,
+      biometricEnabled: false,
+      biometricBusy: false,
     };
+  },
+  created() {
+    void isBiometricUnlockEnabled()
+      .then((enabled) => {
+        this.biometricEnabled = enabled;
+      })
+      .catch(() => {
+        this.biometricEnabled = false;
+      });
   },
   beforeDestroy() {
     this.cancelFilePassphrase(false);
@@ -123,6 +143,7 @@ export default ImportFeedbackMixin.extend({
         return;
       }
       const signal = this.startImport(this.i18n.ui_importing_backup);
+      const runId = this.importRunId;
 
       try {
         if (file.size > MAX_BACKUP_CONTENT_BYTES) {
@@ -133,6 +154,9 @@ export default ImportFeedbackMixin.extend({
         const contentBuffer = await readBackupFile(
           file,
           (progressEvent: ProgressEvent<FileReader>) => {
+            if (!this.isActiveImport(runId)) {
+              return;
+            }
             if (progressEvent.lengthComputable) {
               const ratio =
                 progressEvent.total > 0
@@ -146,15 +170,24 @@ export default ImportFeedbackMixin.extend({
           },
           signal
         );
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
         this.setProgress(38, this.i18n.ui_progress_parsing_backup);
         const parsedBackup = await parseBackupBufferOffThread(contentBuffer, {
           signal,
-          onProgress: (value) =>
-            this.setProgress(
-              38 + value * 0.12,
-              this.i18n.ui_progress_parsing_backup
-            ),
+          onProgress: (value) => {
+            if (this.isActiveImport(runId)) {
+              this.setProgress(
+                38 + value * 0.12,
+                this.i18n.ui_progress_parsing_backup
+              );
+            }
+          },
         });
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
         this.setProgress(
           46,
           parsedBackup.source === "bitwarden"
@@ -164,31 +197,49 @@ export default ImportFeedbackMixin.extend({
             : this.i18n.ui_progress_organizing_records
         );
 
-        const passphrase = parsedBackup.requiresPassphrase
+        const passphraseResult = parsedBackup.requiresPassphrase
           ? await this.getOldPassphrase()
           : null;
-        if (parsedBackup.requiresPassphrase && passphrase === null) {
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
+        if (parsedBackup.requiresPassphrase && passphraseResult === null) {
           this.importSummaryTitle = this.i18n.ui_import_cancelled;
           this.importSummaryTone = "warning";
           this.importSummaryMessage = this.i18n.ui_no_data_changed;
           this.setProgress(100, this.i18n.ui_import_cancelled);
           return;
         }
-        if (passphrase) {
+        const passphrase =
+          typeof passphraseResult === "string" ? passphraseResult : null;
+        const preUnlockedKeys =
+          passphraseResult &&
+          typeof passphraseResult === "object" &&
+          "preUnlockedKeys" in passphraseResult
+            ? passphraseResult.preUnlockedKeys
+            : undefined;
+        if (passphrase || preUnlockedKeys) {
           this.setProgress(58, this.i18n.ui_progress_decrypting);
         }
 
         const decryptedBackup = await decryptParsedBackup(
           parsedBackup,
           passphrase,
-          signal
+          signal,
+          preUnlockedKeys
         );
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
         this.lockImportCancellation();
         const result = await applyDecryptedBackup(decryptedBackup, {
           encryption: this.$encryption as Encryption,
           clearFirst: this.clearBeforeImport,
-          onProgress: (value, key) =>
-            this.setProgress(value, this.i18n[key] || key),
+          onProgress: (value, key) => {
+            if (this.isActiveImport(runId)) {
+              this.setProgress(value, this.i18n[key] || key);
+            }
+          },
           refresh: this.$store
             ? async () => {
                 await this.$store.dispatch("groups/refreshGroups");
@@ -197,8 +248,16 @@ export default ImportFeedbackMixin.extend({
             : undefined,
           signal,
         });
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
 
-        const { failedCount, succeededCount } = parsedBackup;
+        const skippedOnDecrypt = Math.max(
+          0,
+          parsedBackup.succeededCount - result.importedEntryCount
+        );
+        const failedCount = parsedBackup.failedCount + skippedOnDecrypt;
+        const succeededCount = result.importedEntryCount;
         this.importSummaryTitle =
           failedCount === 0
             ? this.i18n.ui_import_complete
@@ -217,6 +276,9 @@ export default ImportFeedbackMixin.extend({
           ...result,
         });
         this.setProgress(100, this.i18n.ui_import_complete);
+        chrome.runtime?.sendMessage?.({ action: "entriesUpdated" }, () => {
+          void chrome.runtime.lastError;
+        });
 
         if (closeWindow) {
           window.scrollTo({
@@ -225,7 +287,10 @@ export default ImportFeedbackMixin.extend({
           });
         }
       } catch (error) {
-        if (this.isImportCancellation(error)) {
+        if (!this.isActiveImport(runId)) {
+          return;
+        }
+        if (this.isImportCancellation(error, signal)) {
           if (!this.importSummaryMessage) {
             this.cancelImport();
           }
@@ -238,18 +303,48 @@ export default ImportFeedbackMixin.extend({
         this.setProgress(100, this.i18n.ui_import_error);
       } finally {
         target.value = "";
-        this.getFilePassphrase = false;
-        this.importFilePassphrase = "";
-        this.filePassphraseResolver = null;
+        if (this.isActiveImport(runId)) {
+          this.getFilePassphrase = false;
+          this.importFilePassphrase = "";
+          this.filePassphraseResolver = null;
+        }
         this.finishImport(signal);
       }
     },
     async getOldPassphrase() {
       this.getFilePassphrase = true;
       this.setProgress(58, this.i18n.ui_progress_waiting_password);
-      return new Promise<string | null>((resolve) => {
+      return new Promise<BackupPassphraseResult>((resolve) => {
         this.filePassphraseResolver = resolve;
       });
+    },
+    async unlockFilePassphraseWithBiometrics() {
+      if (
+        !this.biometricEnabled ||
+        this.biometricBusy ||
+        !this.filePassphraseResolver
+      ) {
+        return;
+      }
+      this.biometricBusy = true;
+      try {
+        const preUnlockedKeys = await unlockBiometricBackupKeys();
+        const resolver = this.filePassphraseResolver;
+        this.filePassphraseResolver = null;
+        this.getFilePassphrase = false;
+        this.importFilePassphrase = "";
+        resolver?.({ preUnlockedKeys });
+      } catch (error) {
+        const notAllowed =
+          error instanceof Error && error.name === "NotAllowedError";
+        this.importSummaryTitle = this.i18n.ui_import_failed;
+        this.importSummaryTone = "error";
+        this.importSummaryMessage = notAllowed
+          ? this.i18n.biometric_unlock_cancelled
+          : this.i18n.biometric_unlock_failed;
+      } finally {
+        this.biometricBusy = false;
+      }
     },
     submitFilePassphrase() {
       const passphrase = this.importFilePassphrase;

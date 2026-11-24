@@ -13,54 +13,36 @@ export class BrowserStorage {
       managedLocation === StorageLocation.Sync ||
       managedLocation === StorageLocation.Local
     ) {
-      return new Promise((resolve) => {
-        if (UserSettings.items.storageLocation !== managedLocation) {
-          UserSettings.items.storageLocation = managedLocation;
-          UserSettings.commitItems();
-        }
-        resolve(managedLocation);
-        return;
-      });
+      if (UserSettings.items.storageLocation !== managedLocation) {
+        UserSettings.items.storageLocation = managedLocation;
+        await UserSettings.commitItems();
+      }
+      return managedLocation;
     } else if (
       UserSettings.items.storageLocation !== StorageLocation.Sync &&
       UserSettings.items.storageLocation !== StorageLocation.Local
     ) {
-      return new Promise((resolve, reject) => {
-        let amountSync: number;
-        let amountLocal: number;
-        chrome.storage.local.get((local) => {
-          amountLocal = Object.keys(local).length;
-          if (local.LocalStorage) {
-            amountLocal--;
-          }
-          try {
-            chrome.storage.sync.get((sync) => {
-              amountSync = Object.keys(sync).length;
-              // If storage location can't be found try to auto-detect storage
-              // location
-              if (amountLocal > amountSync && amountSync === 0) {
-                UserSettings.items.storageLocation = StorageLocation.Local;
-              } else if (amountLocal < amountSync && amountLocal === 0) {
-                UserSettings.items.storageLocation = StorageLocation.Sync;
-              } else {
-                // Use default
-                UserSettings.items.storageLocation = StorageLocation.Sync;
-              }
-              UserSettings.commitItems();
-              resolve(UserSettings.items.storageLocation);
-              return;
-            });
-          } catch (error) {
-            reject(error);
-            return;
-          }
-        });
-      });
+      const local = await chrome.storage.local.get();
+      const sync = await chrome.storage.sync.get();
+      const amountLocal = Object.values(local).filter((item) =>
+        isOtpOrGroupRecord(item)
+      ).length;
+      const amountSync = Object.values(sync).filter((item) =>
+        isOtpOrGroupRecord(item)
+      ).length;
+      // If storage location can't be found try to auto-detect storage location
+      if (amountLocal > amountSync && amountSync === 0) {
+        UserSettings.items.storageLocation = StorageLocation.Local;
+      } else if (amountLocal < amountSync && amountLocal === 0) {
+        UserSettings.items.storageLocation = StorageLocation.Sync;
+      } else {
+        // Use default
+        UserSettings.items.storageLocation = StorageLocation.Sync;
+      }
+      await UserSettings.commitItems();
+      return UserSettings.items.storageLocation;
     } else {
-      return new Promise((resolve) => {
-        resolve(UserSettings.items.storageLocation || StorageLocation.Sync);
-        return;
-      });
+      return UserSettings.items.storageLocation || StorageLocation.Sync;
     }
   }
 
@@ -308,25 +290,32 @@ export class BrowserStorage {
   }
 
   static async mergeOtpAndGroupData(data: { [key: string]: OTPStorage }) {
-    const previousData = await this.get();
+    const allPrevious = await this.get();
     await this.assertImportPayloadIsSafe(data);
-    const transactionKeys = Array.from(
-      new Set([...Object.keys(previousData), ...Object.keys(data)])
-    );
+    const incomingKeys = Object.keys(data);
+    const previousData = createRecordMap<OTPStorage>();
+    const insertedKeys: string[] = [];
+    for (const key of incomingKeys) {
+      if (Object.prototype.hasOwnProperty.call(allPrevious, key)) {
+        previousData[key] = allPrevious[key];
+      } else {
+        insertedKeys.push(key);
+      }
+    }
 
     try {
-      if (Object.keys(data).length) {
+      if (incomingKeys.length) {
         await this.set(data);
       }
 
       const storedData = await this.get();
-      if (!Object.keys(data).every((key) => key in storedData)) {
+      if (!incomingKeys.every((key) => key in storedData)) {
         throw new Error("importIncompleteWrite");
       }
     } catch (error) {
       try {
-        if (transactionKeys.length) {
-          await this.remove(transactionKeys);
+        if (insertedKeys.length) {
+          await this.remove(insertedKeys);
         }
         if (Object.keys(previousData).length) {
           await this.set(previousData);
@@ -469,6 +458,7 @@ export class EntryStorage {
     unencrypted?: boolean
   ): OTPStorage {
     let secret: string;
+    let isLockedV2 = false;
     if (!entry.secret && entry.encData && entry.keyId) {
       return {
         dataType: DataType.EncOTPStorage,
@@ -476,6 +466,9 @@ export class EntryStorage {
         data: entry.encData,
         index: entry.index,
       };
+    } else if (!entry.secret && entry.encSecret) {
+      secret = entry.encSecret;
+      isLockedV2 = true;
     } else if (entry.secret) {
       secret = entry.secret;
     } else {
@@ -483,7 +476,8 @@ export class EntryStorage {
       console.warn("Invalid entry", entry);
     }
 
-    let encrypted = entry.encryption?.getEncryptionStatus() || false;
+    let encrypted =
+      isLockedV2 || entry.encryption?.getEncryptionStatus() || false;
 
     if (unencrypted && entry.secret) {
       secret = entry.secret;
@@ -543,6 +537,10 @@ export class EntryStorage {
 
     storageItem.dataType = DataType.OTPStorage;
 
+    if (isLockedV2) {
+      return storageItem;
+    }
+
     if (
       !unencrypted &&
       encrypted &&
@@ -560,6 +558,7 @@ export class EntryStorage {
       };
     } else if (encrypted) {
       console.error("Could not encrypt malformed entry: ", entry);
+      throw new Error("missingEncryptionKeyId");
     }
 
     return storageItem;
@@ -658,6 +657,14 @@ export class EntryStorage {
   }
 
   static async backupGetExport(encryption: Encryption, encrypted?: boolean) {
+    const activeEncryption = new Encryption(
+      encryption?.getEncryptionPassword?.() || "",
+      encryption?.getEncryptionKeyId?.() || ""
+    );
+    if (encrypted && !activeEncryption.getEncryptionStatus()) {
+      throw new Error("encryptionRequired");
+    }
+
     const rawData = await BrowserStorage.get();
     const exportData: { [hash: string]: OTPStorage | Key | OldKey } = {};
 
@@ -667,13 +674,15 @@ export class EntryStorage {
       if (isGroupRecord(storageItem)) {
         if (
           encrypted &&
-          encryption.getEncryptionStatus() &&
-          encryption.getEncryptionKeyId()
+          activeEncryption.getEncryptionStatus() &&
+          activeEncryption.getEncryptionKeyId()
         ) {
           exportData[hash] = {
             dataType: DataType.EncGroup,
-            keyId: encryption.getEncryptionKeyId(),
-            data: encryption.getEncryptedString(JSON.stringify(storageItem)),
+            keyId: activeEncryption.getEncryptionKeyId(),
+            data: activeEncryption.getEncryptedString(
+              JSON.stringify(storageItem)
+            ),
             index: storageItem.index,
           };
         } else {
@@ -700,26 +709,25 @@ export class EntryStorage {
           continue;
         }
 
-        if (encryption && encryption.getEncryptionStatus()) {
-          try {
-            const tempEntry = ({
-              encData: storageItem.data,
-              keyId: storageItem.keyId,
-            } as unknown) as OTPEntryInterface;
-            const decrypted = encryption.decryptEncSecret(tempEntry);
-            if (decrypted && decrypted.secret) {
-              const plainData = {
-                ...decrypted,
-                encrypted: false,
-                dataType: DataType.OTPStorage,
-              };
-              delete plainData.keyId;
-              exportData[hash] = plainData;
-            }
-          } catch (error) {
-            console.error("Failed to decrypt EncOTPStorage:", error);
-          }
+        if (!activeEncryption.getEncryptionStatus()) {
+          throw new Error("vaultLocked");
         }
+        const tempEntry = ({
+          encData: storageItem.data,
+          keyId: storageItem.keyId,
+        } as unknown) as OTPEntryInterface;
+        const decrypted = activeEncryption.decryptEncSecret(tempEntry);
+        if (!decrypted || !decrypted.secret) {
+          throw new Error("decryptionFailed");
+        }
+        const plainData = {
+          ...decrypted,
+          index: storageItem.index,
+          encrypted: false,
+          dataType: DataType.OTPStorage,
+        };
+        delete plainData.keyId;
+        exportData[hash] = plainData;
         continue;
       }
 
@@ -727,8 +735,7 @@ export class EntryStorage {
 
       if (
         encrypted &&
-        encryption &&
-        encryption.getEncryptionStatus() &&
+        activeEncryption.getEncryptionStatus() &&
         entry.dataType === DataType.OTPStorage &&
         !entry.encrypted
       ) {
@@ -759,7 +766,7 @@ export class EntryStorage {
             encrypted: false as const,
           };
 
-          const otpEntry = new OTPEntry(entryData, encryption);
+          const otpEntry = new OTPEntry(entryData, activeEncryption);
           const encryptedStorage = this.getOTPStorageFromEntry(otpEntry);
           if (encryptedStorage.dataType === DataType.EncOTPStorage) {
             exportData[hash] = encryptedStorage;
@@ -767,6 +774,7 @@ export class EntryStorage {
           }
         } catch (error) {
           console.error("Failed to encrypt entry for export:", error);
+          throw error;
         }
       }
 
@@ -811,11 +819,17 @@ export class EntryStorage {
         delete entry.keyId;
 
         if (entry.encrypted) {
-          const decryptedSecret = encryption.decryptSecretString(entry.secret);
-          if (decryptedSecret !== entry.secret && decryptedSecret !== null) {
-            entry.secret = decryptedSecret;
-            entry.encrypted = false;
+          if (!activeEncryption.getEncryptionStatus()) {
+            throw new Error("vaultLocked");
           }
+          const decryptedSecret = activeEncryption.decryptSecretString(
+            entry.secret
+          );
+          if (decryptedSecret === null) {
+            throw new Error("decryptionFailed");
+          }
+          entry.secret = decryptedSecret;
+          entry.encrypted = false;
         }
 
         exportData[entry.hash || hash] = entry;
@@ -824,7 +838,7 @@ export class EntryStorage {
       }
     }
 
-    if (encrypted && encryption.getEncryptionStatus()) {
+    if (encrypted && activeEncryption.getEncryptionStatus()) {
       const keys = await BrowserStorage.getKeys();
       if (isOldKey(keys)) {
         Object.assign(exportData, { key: keys });
@@ -971,21 +985,79 @@ export class EntryStorage {
     return this.ensureUniqueIndex(payload);
   }
 
+  static async assertEncryptionReadyForVault(
+    encryption: Encryption
+  ): Promise<Encryption> {
+    const snapshot = new Encryption(
+      encryption?.getEncryptionPassword?.() || "",
+      encryption?.getEncryptionKeyId?.() || ""
+    );
+    if (await this.hasEncryptionKey()) {
+      if (!snapshot.getEncryptionStatus()) {
+        throw new Error("vaultLocked");
+      }
+      const keys = await BrowserStorage.getKeys();
+      if (
+        !isOldKey(keys) &&
+        keys.length > 0 &&
+        !snapshot.getEncryptionKeyId()
+      ) {
+        throw new Error("vaultLocked");
+      }
+    }
+    return snapshot;
+  }
+
+  private static offsetIncomingEntryIndices(
+    existingData: { [hash: string]: OTPStorage },
+    incomingPayload: { [hash: string]: OTPStorage }
+  ) {
+    let maxIndex = -1;
+    for (const hash of Object.keys(existingData)) {
+      const record = existingData[hash];
+      if (getOtpOrGroupRecordKind(record) === "otp") {
+        const idx = Number((record as { index?: number }).index);
+        if (Number.isFinite(idx) && idx > maxIndex) {
+          maxIndex = idx;
+        }
+      }
+    }
+    const baseOffset = maxIndex + 1;
+    for (const hash of Object.keys(incomingPayload)) {
+      const record = incomingPayload[hash] as { index?: number };
+      const idx = Number(record.index);
+      record.index = baseOffset + (Number.isFinite(idx) && idx >= 0 ? idx : 0);
+    }
+  }
+
   static async import(
     encryption: Encryption,
     data: { [hash: string]: RawOTPStorage }
   ) {
-    let currentData = await BrowserStorage.get();
-    const existingOtpHashes = new Set(
-      Object.keys(currentData).filter(
-        (hash) => getOtpOrGroupRecordKind(currentData[hash]) === "otp"
-      )
+    const activeEncryption = await this.assertEncryptionReadyForVault(
+      encryption
     );
-    const payload = this.getImportPayload(encryption, data, existingOtpHashes);
+    const currentData = await BrowserStorage.get();
+    const existingOtpEntries = createRecordMap<OTPStorage>();
+    const existingOtpHashes = new Set<string>();
+    for (const hash of Object.keys(currentData)) {
+      if (getOtpOrGroupRecordKind(currentData[hash]) === "otp") {
+        existingOtpEntries[hash] = currentData[hash];
+        existingOtpHashes.add(hash);
+      }
+    }
+    const payload = this.getImportPayload(
+      activeEncryption,
+      data,
+      existingOtpHashes
+    );
     await BrowserStorage.assertImportPayloadIsSafe(payload);
-    currentData = { ...currentData, ...payload };
-    currentData = this.ensureUniqueIndex(currentData);
-    await BrowserStorage.set(currentData);
+    this.offsetIncomingEntryIndices(existingOtpEntries, payload);
+    const mergedOtpEntries = this.ensureUniqueIndex({
+      ...existingOtpEntries,
+      ...payload,
+    });
+    await BrowserStorage.set(mergedOtpEntries);
     return Object.keys(payload).length;
   }
 
@@ -994,7 +1066,10 @@ export class EntryStorage {
     data: { [hash: string]: RawOTPStorage },
     groups: { [id: string]: GroupStorageRecord }
   ) {
-    const entryPayload = this.getImportPayload(encryption, data);
+    const activeEncryption = await this.assertEncryptionReadyForVault(
+      encryption
+    );
+    const entryPayload = this.getImportPayload(activeEncryption, data);
     if (!Object.keys(entryPayload).length) {
       throw new Error("noImportableEntries");
     }
@@ -1022,14 +1097,20 @@ export class EntryStorage {
     data: { [hash: string]: RawOTPStorage },
     groups: { [id: string]: GroupStorageRecord }
   ) {
-    const currentData = await BrowserStorage.get();
-    const existingOtpHashes = new Set(
-      Object.keys(currentData).filter(
-        (hash) => getOtpOrGroupRecordKind(currentData[hash]) === "otp"
-      )
+    const activeEncryption = await this.assertEncryptionReadyForVault(
+      encryption
     );
+    const currentData = await BrowserStorage.get();
+    const existingOtpEntries = createRecordMap<OTPStorage>();
+    const existingOtpHashes = new Set<string>();
+    for (const hash of Object.keys(currentData)) {
+      if (getOtpOrGroupRecordKind(currentData[hash]) === "otp") {
+        existingOtpEntries[hash] = currentData[hash];
+        existingOtpHashes.add(hash);
+      }
+    }
     const entryPayload = this.getImportPayload(
-      encryption,
+      activeEncryption,
       data,
       existingOtpHashes
     );
@@ -1051,8 +1132,9 @@ export class EntryStorage {
       throw new Error("importBatchIdConflict");
     }
 
+    this.offsetIncomingEntryIndices(existingOtpEntries, entryPayload);
     const normalizedEntries = this.ensureUniqueIndex({
-      ...currentData,
+      ...existingOtpEntries,
       ...entryPayload,
     });
     await BrowserStorage.mergeOtpAndGroupData({
@@ -1437,10 +1519,38 @@ export class GroupStorage {
     );
   }
 
-  static async delete(groupId: string) {
-    const affectedEntries = (await EntryStorage.get()).filter(
+  static async delete(
+    groupId: string,
+    encryptions?: Map<string, EncryptionInterface> | EncryptionInterface
+  ) {
+    const entries = await EntryStorage.get();
+    if (encryptions) {
+      const fallbackEncryption =
+        encryptions instanceof Map
+          ? Array.from(encryptions.values()).find((item) =>
+              item.getEncryptionStatus()
+            )
+          : encryptions;
+      for (const entry of entries) {
+        if (entry.secret !== null) {
+          continue;
+        }
+        const entryEncryption =
+          encryptions instanceof Map
+            ? (entry.keyId && encryptions.get(entry.keyId)) ||
+              (!entry.keyId && entry.encSecret ? fallbackEncryption : undefined)
+            : encryptions;
+        if (entryEncryption?.getEncryptionStatus()) {
+          entry.applyEncryption(entryEncryption);
+        }
+      }
+    }
+    const affectedEntries = entries.filter(
       (entry) => entry.groupId === groupId
     );
+    if (affectedEntries.some((entry) => entry.secret === null)) {
+      throw new Error("vaultLocked");
+    }
     for (const entry of affectedEntries) {
       entry.groupId = undefined;
     }
@@ -1478,10 +1588,12 @@ export class ManagedStorage {
             if (chrome.runtime.lastError) {
               return resolve(defaultValue);
             }
-            if (data) {
-              if (data[key]) {
-                return resolve(data[key]);
-              }
+            if (
+              data &&
+              Object.prototype.hasOwnProperty.call(data, key) &&
+              data[key] !== undefined
+            ) {
+              return resolve(data[key]);
             }
             return resolve(defaultValue);
           });

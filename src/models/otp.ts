@@ -49,13 +49,30 @@ export class OTPUtil {
   }
 }
 
-export function normalizeOtpSecretForType(secret: string, type: OTPType) {
+export function normalizeOtpSecretForType(
+  secret: string,
+  type: OTPType,
+  minLength = 16
+) {
   const normalizedSecret = secret.replace(/\s+/g, "");
   const isBase32Secret = /^[a-z2-7]+=*$/i.test(normalizedSecret);
   const isHexSecret = /^[0-9a-f]+$/i.test(normalizedSecret);
 
-  if (normalizedSecret.length < 16 || (!isBase32Secret && !isHexSecret)) {
+  if (
+    normalizedSecret.length < minLength ||
+    (!isBase32Secret && !isHexSecret)
+  ) {
     return null;
+  }
+
+  if (type === OTPType.battle || type === OTPType.steam) {
+    if (!isBase32Secret) {
+      return null;
+    }
+    const paddingCount = (normalizedSecret.match(/=+$/) || [""])[0].length;
+    if (![0, 1, 3, 4, 6].includes(paddingCount)) {
+      return null;
+    }
   }
 
   let normalizedType = type;
@@ -94,6 +111,8 @@ export function regenerateLegacyEntryHash(
   return previousHash;
 }
 
+const lastCodeCacheKeys = new WeakMap<OTPEntry, string>();
+
 export class OTPEntry implements OTPEntryInterface {
   type: OTPType;
   index: number;
@@ -112,7 +131,7 @@ export class OTPEntry implements OTPEntryInterface {
   encData?: string;
   encSecret?: string;
   keyId?: string;
-  code = "&bull;&bull;&bull;&bull;&bull;&bull;";
+  code = "\u2022\u2022\u2022\u2022\u2022\u2022";
 
   constructor(
     entry:
@@ -250,6 +269,10 @@ export class OTPEntry implements OTPEntryInterface {
       this.secret = encryption.decryptSecretString(this.encSecret);
       if (this.secret) {
         this.encSecret = "";
+        this.encryption = encryption;
+        if (this.type !== OTPType.hotp && this.type !== OTPType.hhex) {
+          this.generate();
+        }
       }
       return;
     }
@@ -304,9 +327,19 @@ export class OTPEntry implements OTPEntryInterface {
       return;
     }
     this.generate();
-    if (this.secret !== null) {
+    if (
+      this.secret !== null &&
+      this.code !== CodeState.Invalid &&
+      this.code !== CodeState.Encrypted
+    ) {
+      const previousCounter = this.counter;
       this.counter++;
-      await this.update();
+      try {
+        await this.update();
+      } catch (error) {
+        this.counter = previousCounter;
+        throw error;
+      }
     }
     return;
   }
@@ -316,7 +349,9 @@ export class OTPEntry implements OTPEntryInterface {
   }
 
   generate() {
-    const offset = UserSettings.items ? UserSettings.items.offset : 0;
+    const offset = UserSettings.items
+      ? Number(UserSettings.items.offset || 0)
+      : 0;
     if (!UserSettings.items) {
       // browser storage is async, so we need to wait for it to load
       // and re-generate the code
@@ -327,11 +362,31 @@ export class OTPEntry implements OTPEntryInterface {
       });
     }
 
-    if (!this.secret && !this.encData) {
+    if (!this.secret && !this.encData && !this.encSecret) {
+      lastCodeCacheKeys.delete(this);
       this.code = CodeState.Invalid;
     } else if (!this.secret) {
+      lastCodeCacheKeys.delete(this);
       this.code = CodeState.Encrypted;
     } else {
+      const isTimeBased =
+        this.type !== OTPType.hotp && this.type !== OTPType.hhex;
+      let cacheKey = "";
+      let epochSeconds: number | undefined;
+      if (isTimeBased) {
+        epochSeconds = Math.floor(Date.now() / 1000) + offset;
+        const step = Math.floor(epochSeconds / this.period);
+        cacheKey = `${this.type}|${this.secret}|${step}|${this.period}|${this.digits}|${this.algorithm}`;
+        if (
+          cacheKey === lastCodeCacheKeys.get(this) &&
+          this.code !== CodeState.Invalid &&
+          this.code !== CodeState.Encrypted &&
+          !this.code.startsWith("\u2022")
+        ) {
+          return;
+        }
+      }
+
       try {
         this.code = KeyUtilities.generate(
           this.type,
@@ -340,9 +395,16 @@ export class OTPEntry implements OTPEntryInterface {
           this.period,
           this.digits,
           this.algorithm,
-          offset
+          offset,
+          epochSeconds
         );
+        if (cacheKey) {
+          lastCodeCacheKeys.set(this, cacheKey);
+        } else {
+          lastCodeCacheKeys.delete(this);
+        }
       } catch (error) {
+        lastCodeCacheKeys.delete(this);
         this.code = CodeState.Invalid;
         console.warn("Invalid secret.", error);
       }

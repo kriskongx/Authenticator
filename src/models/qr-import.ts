@@ -52,24 +52,25 @@ export async function getOtpUrlFromQrFile(
       }
     }, QR_DECODE_TIMEOUT_MS);
     const handleAbort = () => {
+      fail(new Error("importCancelled"));
       try {
         reader.abort();
       } catch {
         // Ignore an already completed FileReader.
       }
-      fail(new Error("importCancelled"));
     };
     signal?.addEventListener("abort", handleAbort, { once: true });
 
     reader.onerror = () => fail(new Error("readQrFailed"));
-    reader.onabort = () => fail(new Error("readQrAborted"));
+    reader.onabort = () =>
+      fail(new Error(signal?.aborted ? "importCancelled" : "readQrAborted"));
     reader.onload = () => {
       const imageUrl = reader.result as string;
       const qrReader = new QRCode();
       qrReader.callback = (
         error: string,
-        text: {
-          result: string;
+        text?: {
+          result?: string;
           points: Array<{
             x: number;
             y: number;
@@ -78,7 +79,7 @@ export async function getOtpUrlFromQrFile(
           }>;
         }
       ) => {
-        if (error) {
+        if (error || typeof text?.result !== "string") {
           decodeWithJsQr(imageUrl).then(finish).catch(fail);
         } else {
           finish(getSupportedQrPayload(text.result));

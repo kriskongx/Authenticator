@@ -69,11 +69,19 @@ die() {
 }
 
 manifest_path() {
-  case "$1" in
-    chrome) printf '%s' "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/$HOST_NAME.json" ;;
-    edge) printf '%s' "$HOME/Library/Application Support/Microsoft Edge/NativeMessagingHosts/$HOST_NAME.json" ;;
-    firefox) printf '%s' "$HOME/Library/Application Support/Mozilla/NativeMessagingHosts/$HOST_NAME.json" ;;
-  esac
+  if [ "$(uname -s)" = "Linux" ]; then
+    case "$1" in
+      chrome) printf '%s' "$HOME/.config/google-chrome/NativeMessagingHosts/$HOST_NAME.json" ;;
+      edge) printf '%s' "$HOME/.config/microsoft-edge/NativeMessagingHosts/$HOST_NAME.json" ;;
+      firefox) printf '%s' "$HOME/.mozilla/native-messaging-hosts/$HOST_NAME.json" ;;
+    esac
+  else
+    case "$1" in
+      chrome) printf '%s' "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/$HOST_NAME.json" ;;
+      edge) printf '%s' "$HOME/Library/Application Support/Microsoft Edge/NativeMessagingHosts/$HOST_NAME.json" ;;
+      firefox) printf '%s' "$HOME/Library/Application Support/Mozilla/NativeMessagingHosts/$HOST_NAME.json" ;;
+    esac
+  fi
 }
 
 browser_label() {
@@ -100,7 +108,7 @@ registered_id() {
 
 runner_node() {
   [ -f "$RUNNER" ] || return 0
-  sed -n 's/^exec "\([^"]*\)".*/\1/p' "$RUNNER" | head -1
+  sed -n -e "s/^exec '\([^']*\)'.*/\1/p" -e 's/^exec "\([^"]*\)".*/\1/p' "$RUNNER" | head -1
 }
 
 short_path() {
@@ -544,7 +552,7 @@ cmd_install() {
 
   printf '安装助手：扩展 ID %s\n' "$id"
   printf '          node %s\n\n' "$node_bin"
-  node "$SCRIPT_DIR/install.js" "${install_args[@]}"
+  node "$SCRIPT_DIR/install.js" "${install_args[@]}" || return $?
   printf '下一步：重启浏览器（Chrome 会缓存清单），然后在扩展设置里打开「本地自动导入」。\n'
 }
 
@@ -558,7 +566,7 @@ cmd_uninstall() {
     printf '没有已注册的助手，无需卸载。\n'
     return 0
   fi
-  node "$SCRIPT_DIR/install.js" --uninstall
+  node "$SCRIPT_DIR/install.js" --uninstall || return $?
   printf '\n已取消注册。配置、收件箱与导入记录都保留在 %s\n' "$(short_path "$BASE_DIR")"
   printf '要彻底清理，再执行：rm -rf %s\n' "$(short_path "$BASE_DIR")"
   printf '记得在扩展设置里关掉「本地自动导入」开关，重启浏览器后生效。\n'

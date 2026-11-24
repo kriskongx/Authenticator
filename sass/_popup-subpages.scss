@@ -63,7 +63,7 @@
 // The restore list is a dialog, not a page, so it needs its own frame.
 // Sit below the notification/confirm layer (1000): the confirm prompt raised
 // from a row click must not be covered by this backdrop.
-.cloud-restore-backdrop {
+.subpage-dialog-backdrop.cloud-restore-backdrop {
   z-index: 900;
 }
 

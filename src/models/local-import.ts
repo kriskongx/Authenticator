@@ -1,4 +1,5 @@
 import { BackupImportResult, importBackupContent } from "./import-api";
+import { MAX_BACKUP_CONTENT_BYTES } from "./import-limits";
 
 export const LOCAL_IMPORT_HOST = "com.otp_ee.authenticator_import";
 export const LOCAL_IMPORT_ALARM = "localImportWatch";
@@ -221,6 +222,7 @@ export async function importFromLocalHost(
 
     const chunks: Uint8Array[] = [];
     let offset = 0;
+    let totalBytes = 0;
     try {
       for (;;) {
         const chunk = await call({
@@ -229,22 +231,56 @@ export async function importFromLocalHost(
           offset,
           length: CHUNK_BYTES,
         });
-        chunks.push(base64ToBytes(String(chunk.data || "")));
-        offset = Number(chunk.offset) + Number(chunk.length);
+        const chunkLength = Number(chunk.length);
+        const chunkOffset = Number(chunk.offset);
+        if (
+          !Number.isFinite(chunkLength) ||
+          !Number.isFinite(chunkOffset) ||
+          chunkOffset !== offset ||
+          chunkLength < 0 ||
+          (chunkLength === 0 && !chunk.eof)
+        ) {
+          throw new Error("nativeHostInvalidChunk");
+        }
+        const bytes = base64ToBytes(String(chunk.data || ""));
+        if (bytes.byteLength !== chunkLength) {
+          throw new Error("nativeHostInvalidChunk");
+        }
+        totalBytes += bytes.byteLength;
+        if (totalBytes > MAX_BACKUP_CONTENT_BYTES) {
+          throw new Error("backupContentTooLarge");
+        }
+        chunks.push(bytes);
+        offset = chunkOffset + chunkLength;
         if (chunk.eof) {
           break;
         }
       }
 
-      const content = new TextDecoder().decode(concatBytes(chunks));
+      const mergedBytes = concatBytes(chunks);
+      if (
+        info.digest &&
+        !(await verifyLocalBackupDigest(mergedBytes, info.digest))
+      ) {
+        throw new Error("nativeHostDigestMismatch");
+      }
+      const content = new TextDecoder().decode(mergedBytes);
       const result = await importBackupContent({ content });
-      await call({ type: "ack", name: info.name, digest: info.digest });
+      try {
+        await call({ type: "ack", name: info.name, digest: info.digest });
+      } catch (ackError) {
+        console.warn("[LocalImport] Failed to acknowledge import:", ackError);
+      }
       await clearFailure();
       return result;
     } catch (error) {
-      // A vault that locked mid-import is not a broken export: keep it
-      // eligible so the next unlock retries right away.
-      if (!(error instanceof Error && error.message === "vaultLocked")) {
+      // A vault that locked mid-import or a file replaced mid-read is not a
+      // broken export: keep it eligible so the next tick retries right away.
+      const errorMessage = error instanceof Error ? error.message : "";
+      if (
+        errorMessage !== "vaultLocked" &&
+        errorMessage !== "nativeHostDigestMismatch"
+      ) {
         await recordFailure(info.digest);
       }
       throw error;
@@ -267,6 +303,28 @@ async function recordFailure(digest: string): Promise<void> {
   await chrome.storage.local.set({
     [FAILURE_KEY]: { digest, at: Date.now() },
   });
+}
+
+export async function verifyLocalBackupDigest(
+  bytes: Uint8Array,
+  expectedDigest: string
+): Promise<boolean> {
+  const normalizedExpected = expectedDigest
+    .trim()
+    .replace(/^sha256:/i, "")
+    .toLowerCase();
+  if (!normalizedExpected) {
+    return false;
+  }
+  const computedDigest = await sha256Hex(bytes);
+  return computedDigest === normalizedExpected;
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 async function clearFailure(): Promise<void> {

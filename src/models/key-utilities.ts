@@ -1,10 +1,11 @@
 import { OTPType, OTPAlgorithm, OTPUtil } from "./otp";
-import * as CryptoJS from "crypto-js";
-import {
-  gostEngine as GostEngine,
-  GostDigest,
-  AlgorithmIndentifier,
-} from "node-gost-crypto";
+import type CryptoJS from "crypto-js/core";
+import Hex from "crypto-js/enc-hex";
+import HmacSHA1 from "crypto-js/hmac-sha1";
+import HmacSHA256 from "crypto-js/hmac-sha256";
+import HmacSHA512 from "crypto-js/hmac-sha512";
+import type { AlgorithmIndentifier } from "node-gost-crypto";
+import GostDigest from "node-gost-crypto/lib/gostDigest";
 
 // Originally based on the JavaScript implementation as provided by Russell
 // Sayers on his Tin Isles blog:
@@ -47,7 +48,13 @@ export class KeyUtilities {
         bits += "00000";
         padding++;
       } else {
+        if (padding > 0) {
+          throw new Error("Invalid Base32 string");
+        }
         const val = base32chars.indexOf(base32.charAt(i).toUpperCase());
+        if (val === -1) {
+          throw new Error("Invalid Base32 string");
+        }
         bits += this.leftpad(val.toString(2), 5, "0");
       }
     }
@@ -125,7 +132,8 @@ export class KeyUtilities {
     period: number,
     len?: number,
     algorithm?: OTPAlgorithm,
-    clockOffset?: number
+    clockOffset?: number,
+    epochSeconds?: number
   ) {
     secret = secret.replace(/\s/g, "");
     if (!len) {
@@ -140,6 +148,9 @@ export class KeyUtilities {
         break;
       case OTPType.hex:
       case OTPType.hhex:
+        if (!/^[0-9a-f]+$/i.test(secret)) {
+          throw new Error("Invalid hexadecimal secret key");
+        }
         key = secret;
         break;
       case OTPType.battle:
@@ -160,8 +171,11 @@ export class KeyUtilities {
     }
 
     if (type !== OTPType.hotp && type !== OTPType.hhex) {
-      let epoch = Math.round(new Date().getTime() / 1000.0);
-      if (clockOffset) {
+      let epoch =
+        typeof epochSeconds === "number"
+          ? epochSeconds
+          : Math.floor(Date.now() / 1000);
+      if (typeof epochSeconds !== "number" && clockOffset) {
         epoch = epoch + Number(clockOffset);
       }
       counter = Math.floor(epoch / period);
@@ -180,45 +194,36 @@ export class KeyUtilities {
     let alg: AlgorithmIndentifier;
     let gostCipher: GostDigest;
 
-    let hmacObj: CryptoJS.lib.WordArray;
+    let hmac: string;
     switch (algorithm) {
       case OTPAlgorithm.SHA256:
-        hmacObj = CryptoJS.HmacSHA256(
-          CryptoJS.enc.Hex.parse(time),
-          CryptoJS.enc.Hex.parse(key)
-        );
+        hmac = Hex.stringify(HmacSHA256(Hex.parse(time), Hex.parse(key)));
         break;
       case OTPAlgorithm.SHA512:
-        hmacObj = CryptoJS.HmacSHA512(
-          CryptoJS.enc.Hex.parse(time),
-          CryptoJS.enc.Hex.parse(key)
-        );
+        hmac = Hex.stringify(HmacSHA512(Hex.parse(time), Hex.parse(key)));
         break;
       case OTPAlgorithm.GOST3411_2012_256:
-      case OTPAlgorithm.GOST3411_2012_512:
+      case OTPAlgorithm.GOST3411_2012_512: {
         alg = {
           mode: "HMAC",
           name: "GOST R 34.11",
           version: 2012,
           length: OTPUtil.getOTPAlgorithmSpec(algorithm).length,
         };
-        gostCipher = GostEngine.getGostDigest(alg);
-        hmacObj = CryptoJS.lib.WordArray.create(
-          gostCipher.sign(
-            this.cryptoJsWordArrayToUint8Array(CryptoJS.enc.Hex.parse(key)),
-            this.cryptoJsWordArrayToUint8Array(CryptoJS.enc.Hex.parse(time))
-          )
+        gostCipher = new GostDigest(alg);
+        const gostSignature = gostCipher.sign(
+          this.cryptoJsWordArrayToUint8Array(Hex.parse(key)),
+          this.cryptoJsWordArrayToUint8Array(Hex.parse(time))
         );
+        hmac = Array.from(new Uint8Array(gostSignature), (byte) =>
+          byte.toString(16).padStart(2, "0")
+        ).join("");
         break;
+      }
       default:
-        hmacObj = CryptoJS.HmacSHA1(
-          CryptoJS.enc.Hex.parse(time),
-          CryptoJS.enc.Hex.parse(key)
-        );
+        hmac = Hex.stringify(HmacSHA1(Hex.parse(time), Hex.parse(key)));
         break;
     }
-
-    const hmac = CryptoJS.enc.Hex.stringify(hmacObj);
 
     const offset = this.hex2dec(hmac.substring(hmac.length - 1));
 

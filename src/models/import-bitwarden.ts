@@ -41,7 +41,8 @@ export async function getEntryDataFromBitwarden(data: {
   }
 
   for (const item of data.items || []) {
-    const totp = item.login?.totp;
+    const rawTotp = item.login?.totp;
+    const totp = typeof rawTotp === "string" ? rawTotp.trim() : "";
     if (!totp) {
       continue;
     }
@@ -50,9 +51,11 @@ export async function getEntryDataFromBitwarden(data: {
     let secret: string;
     let issuer = (item.name || "").trim();
     let account = (item.login?.username || "").trim();
+    let counter: number | undefined;
     let period: number | undefined;
     let digits: number | undefined;
     let algorithm: string | undefined;
+    let parsedFromUri = false;
 
     if (totp.toLowerCase().startsWith("otpauth://")) {
       const parsed = parseOtpAuthUri(totp);
@@ -60,24 +63,34 @@ export async function getEntryDataFromBitwarden(data: {
         failedCount++;
         continue;
       }
+      parsedFromUri = true;
       type = parsed.type;
       secret = parsed.secret;
       issuer = issuer || parsed.issuer;
       account = account || parsed.account;
+      counter = parsed.counter;
       period = parsed.period;
       digits = parsed.digits;
       algorithm = parsed.algorithm;
+    } else if (totp.toLowerCase().startsWith("steam://")) {
+      type = "steam";
+      secret = totp.slice("steam://".length).replace(/\s+/g, "").toUpperCase();
     } else {
       // Plain base32 secret (may be lowercase or have spaces)
       secret = totp.replace(/\s+/g, "").toUpperCase();
     }
 
-    if (!/^[2-7A-Z]+=*$/.test(secret) && !/^[0-9a-f]+$/i.test(secret)) {
+    if (!/^[2-7A-Z]+=*$/i.test(secret) && !/^[0-9a-f]+$/i.test(secret)) {
       failedCount++;
       continue;
     }
 
-    if (/^[0-9a-f]+$/i.test(secret) && !/^[2-7A-Z]+=*$/.test(secret)) {
+    if (
+      !parsedFromUri &&
+      type !== "steam" &&
+      /^[0-9a-f]+$/i.test(secret) &&
+      !/^[2-7A-Z]+=*$/i.test(secret)
+    ) {
       type = type === "hotp" ? "hhex" : "hex";
     }
 
@@ -101,6 +114,9 @@ export async function getEntryDataFromBitwarden(data: {
       entry.groupId = folderId;
     }
 
+    if (counter !== undefined) {
+      entry.counter = counter;
+    }
     if (period) {
       entry.period = period;
     }

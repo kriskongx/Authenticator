@@ -22,12 +22,12 @@
 
 ## 2. 工作方式
 
-| 时机 | 行为 |
-| --- | --- |
-| 打开「本地自动导入」开关 | 立刻尝试导入一次 |
-| 每 5 分钟（`chrome.alarms`） | 有新文件就导入，没有就静默退出 |
-| 每次解锁成功 | 立刻补跑，把锁定期间攒下的文件导进去 |
-| 点「立即导入」 | 手动触发（用于验证安装、重试失败） |
+| 时机                         | 行为                                 |
+| ---------------------------- | ------------------------------------ |
+| 打开「本地自动导入」开关     | 立刻尝试导入一次                     |
+| 每 5 分钟（`chrome.alarms`） | 有新文件就导入，没有就静默退出       |
+| 每次解锁成功                 | 立刻补跑，把锁定期间攒下的文件导进去 |
+| 点「立即导入」               | 手动触发（用于验证安装、重试失败）   |
 
 几个关键机制：
 
@@ -74,19 +74,19 @@ node native-host/install.js --extension-id <你的扩展ID>
 
 可选参数：
 
-| 参数 | 作用 |
-| --- | --- |
-| `--dir <路径>` | 指定监听目录，默认 `~/.authenticator-import/inbox`；仅在首次生成 `config.json` 时生效 |
-| `--node <路径>` | 指定写进 `run.sh` 的 node 绝对路径，默认见上 |
-| `--uninstall` | 取消注册：删除浏览器清单与 `run.sh`，保留配置、收件箱与状态文件（详见 §10） |
+| 参数            | 作用                                                                                  |
+| --------------- | ------------------------------------------------------------------------------------- |
+| `--dir <路径>`  | 指定监听目录，默认 `~/.authenticator-import/inbox`；仅在首次生成 `config.json` 时生效 |
+| `--node <路径>` | 指定写进 `run.sh` 的 node 绝对路径，默认见上                                          |
+| `--uninstall`   | 取消注册：删除浏览器清单与 `run.sh`，保留配置、收件箱与状态文件（详见 §10）           |
 
 脚本会写三处：
 
-| 内容 | 位置 |
-| --- | --- |
+| 内容           | 位置                                                                                                                             |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | 浏览器注册清单 | `~/Library/Application Support/{Google/Chrome,Microsoft Edge,Mozilla}/NativeMessagingHosts/com.otp_ee.authenticator_import.json` |
-| 启动脚本 | `native-host/run.sh`（已被 git 忽略，内含 node 绝对路径） |
-| 配置 | `~/.authenticator-import/config.json` |
+| 启动脚本       | `native-host/run.sh`（已被 git 忽略，内含 node 绝对路径）                                                                        |
+| 配置           | `~/.authenticator-import/config.json`                                                                                            |
 
 要撤销这一步，见 §10「取消注册与卸载」。
 
@@ -100,19 +100,19 @@ Chrome 会缓存 native host 清单，**不重启可能仍认为没有注册**�
 
 开关那一行左边显示**监听目录**（家目录缩成 `~`），下面一行是当前状态：
 
-| 状态 | 含义 |
-| --- | --- |
-| 未检测到本机助手 | 清单没注册成功，或 `run.sh` 里的 node 路径失效 |
-| 待导入 `xxx.json` | 助手找到了新文件 |
-| 已连接，暂无新文件 | 一切正常，等下一次导出 |
+| 状态               | 含义                                           |
+| ------------------ | ---------------------------------------------- |
+| 未检测到本机助手   | 清单没注册成功，或 `run.sh` 里的 node 路径失效 |
+| 待导入 `xxx.json`  | 助手找到了新文件                               |
+| 已连接，暂无新文件 | 一切正常，等下一次导出                         |
 
 打开后会在下方展开**当前生效的配置**（即 `config.json` 的内容），不用再开终端确认：
 
-| 行 | 含义 |
-| --- | --- |
-| 匹配 | 文件名规则（`pattern`）与目录内的文件数量 |
-| 上限 | 单文件大小上限（`maxBytes`）与删除策略（`deleteAfterImport`） |
-| 间隔 | 轮询间隔（`intervalMinutes`） |
+| 行   | 含义                                                                                                                                                      |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 匹配 | 文件名规则（`pattern`）与目录内的文件数量                                                                                                                 |
+| 上限 | 单文件大小上限（`maxBytes`）与删除策略（`deleteAfterImport`）                                                                                             |
+| 间隔 | 轮询间隔（`intervalMinutes`）                                                                                                                             |
 | 上次 | 最近一次成功导入的文件名与时间（悬停可看完整时间）。从未导入时显示「还没有导入过」；旧版 `state.json` 只留了摘要、没有时间戳时显示「时间未知 · N 个文件」 |
 
 ### 4.5 在终端查看状态
@@ -176,13 +176,13 @@ Chrome 会缓存 native host 清单，**不重启可能仍认为没有注册**�
 }
 ```
 
-| 字段 | 默认值 | 说明 |
-| --- | --- | --- |
-| `dir` | `~/.authenticator-import/inbox` | 监听目录，取**修改时间最新**的一个文件 |
-| `pattern` | `\\.json$` | 文件名正则，用来过滤其他文件 |
-| `maxBytes` | 100 MB | 超过则忽略，与扩展侧的导入上限一致 |
-| `deleteAfterImport` | `true` | 导入成功后删除源文件；设 `false` 保留 |
-| `intervalMinutes` | `5` | 轮询间隔（分钟），范围 1–1440。改完打开一次设置页即生效（不必重装） |
+| 字段                | 默认值                          | 说明                                                                |
+| ------------------- | ------------------------------- | ------------------------------------------------------------------- |
+| `dir`               | `~/.authenticator-import/inbox` | 监听目录，取**修改时间最新**的一个文件                              |
+| `pattern`           | `\\.json$`                      | 文件名正则，用来过滤其他文件                                        |
+| `maxBytes`          | 100 MB                          | 超过则忽略，与扩展侧的导入上限一致                                  |
+| `deleteAfterImport` | `true`                          | 导入成功后删除源文件；设 `false` 保留                               |
+| `intervalMinutes`   | `5`                             | 轮询间隔（分钟），范围 1–1440。改完打开一次设置页即生效（不必重装） |
 
 注意两点：
 
@@ -250,17 +250,32 @@ bw lock >/dev/null
 
 **扩展新增的权限。** `nativeMessaging`——允许扩展启动已在系统注册的本机程序。它不能启动任意程序，只能启动清单里登记的那一个。
 
-## 9. 排障
+## 9. 本机助手的自测
 
-| 现象 | 原因 | 处理 |
-| --- | --- | --- |
-| 状态显示「未检测到本机助手」 | 清单没注册 / 浏览器没重启 / node 路径失效 | 重跑 `install.js`；`cat native-host/run.sh` 看 node 是否存在；重启浏览器 |
-| 显示「已连接，暂无新文件」但目录里有文件 | 文件名不匹配 `pattern`、文件为空、或已被导入过 | 改名为 `*.json`；删 `state.json` 可强制重导 |
-| 一直「待导入」不消失 | 密码库锁定中 | 解锁后会立刻补跑 |
-| 导入报 `vaultLocked` | 解锁中途锁了 | 解锁后自动重试，无需处理 |
-| 导入报 `noImportableEntries` | 导出里没有 `login.totp` 字段 | 确认 Vaultwarden 条目确实配了 TOTP |
-| 导入报 `backupContentTooLarge` | 超过 100 MB | 拆分或调整 `maxBytes` |
-| 列表出现重复条目 | 旧版本导入（无去重）留下的 | 手动删除重复项，之后的导入不会再产生 |
+改过 `native-host/host.js` 之后，先在本地跑一遍协议冒烟测试，再重新注册：
+
+```bash
+node native-host/test-host.js
+```
+
+它会在临时目录里伪造一个 `~/.authenticator-import`，用浏览器同样的 stdio 协议
+（4 字节长度前缀 + JSON）跟 `host.js` 通信，覆盖 `stage` / `list` / `ack` 三条路径，
+不会动你真实的收件箱。全部通过会输出 `ok` 并以退出码 0 结束。
+
+> 该脚本不依赖浏览器，也不需要重新加载扩展；它验证的是 Chrome 到 host 之间的协议，
+> 扩展侧的定时导入逻辑由 `src/models/local-import.ts` 与后台闹钟负责。
+
+## 10. 排障
+
+| 现象                                     | 原因                                           | 处理                                                                     |
+| ---------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------ |
+| 状态显示「未检测到本机助手」             | 清单没注册 / 浏览器没重启 / node 路径失效      | 重跑 `install.js`；`cat native-host/run.sh` 看 node 是否存在；重启浏览器 |
+| 显示「已连接，暂无新文件」但目录里有文件 | 文件名不匹配 `pattern`、文件为空、或已被导入过 | 改名为 `*.json`；删 `state.json` 可强制重导                              |
+| 一直「待导入」不消失                     | 密码库锁定中                                   | 解锁后会立刻补跑                                                         |
+| 导入报 `vaultLocked`                     | 解锁中途锁了                                   | 解锁后自动重试，无需处理                                                 |
+| 导入报 `noImportableEntries`             | 导出里没有 `login.totp` 字段                   | 确认 Vaultwarden 条目确实配了 TOTP                                       |
+| 导入报 `backupContentTooLarge`           | 超过 100 MB                                    | 拆分或调整 `maxBytes`                                                    |
+| 列表出现重复条目                         | 旧版本导入（无去重）留下的                     | 手动删除重复项，之后的导入不会再产生                                     |
 
 常用命令：
 
@@ -274,7 +289,7 @@ node native-host/test-host.js                           # 协议自测（临时�
 
 扩展侧日志：`chrome://extensions` → 本扩展 → 「服务工作进程」→ 控制台，筛 `[background]`。
 
-## 10. 取消注册与卸载
+## 11. 取消注册与卸载
 
 三种程度，按需要选一种。**先关开关再卸载**：开关关掉会同时清掉定时任务，否则清单删了、扩展还会每隔几分钟尝试连接一次（失败但会在控制台留噪声）。
 
@@ -292,20 +307,20 @@ node native-host/test-host.js                           # 协议自测（临时�
 
 等价于 `node native-host/install.js --uninstall`，只是会先检查是否真的注册过。删掉三份浏览器清单和一个启动脚本：
 
-| 删除 | 说明 |
-| --- | --- |
-| `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.otp_ee.authenticator_import.json` | Chrome |
-| `~/Library/Application Support/Microsoft Edge/NativeMessagingHosts/com.otp_ee.authenticator_import.json` | Edge |
-| `~/Library/Application Support/Mozilla/NativeMessagingHosts/com.otp_ee.authenticator_import.json` | Firefox |
-| `native-host/run.sh` | 生成的启动脚本（含 node 绝对路径） |
+| 删除                                                                                                     | 说明                               |
+| -------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.otp_ee.authenticator_import.json`  | Chrome                             |
+| `~/Library/Application Support/Microsoft Edge/NativeMessagingHosts/com.otp_ee.authenticator_import.json` | Edge                               |
+| `~/Library/Application Support/Mozilla/NativeMessagingHosts/com.otp_ee.authenticator_import.json`        | Firefox                            |
+| `native-host/run.sh`                                                                                     | 生成的启动脚本（含 node 绝对路径） |
 
 **保留**以下内容，不会丢数据也不会重导：
 
-| 保留 | 说明 |
-| --- | --- |
-| `~/.authenticator-import/config.json` | 你的目录、规则、间隔等配置 |
-| `~/.authenticator-import/inbox/` | 尚未导入的导出文件 |
-| `~/.authenticator-import/state.json` | 已导入记录（删了会导致同一份文件被再次导入） |
+| 保留                                  | 说明                                         |
+| ------------------------------------- | -------------------------------------------- |
+| `~/.authenticator-import/config.json` | 你的目录、规则、间隔等配置                   |
+| `~/.authenticator-import/inbox/`      | 尚未导入的导出文件                           |
+| `~/.authenticator-import/state.json`  | 已导入记录（删了会导致同一份文件被再次导入） |
 
 仓库里的 `native-host/host.js`、`install.js`、`test-host.js` 不受影响，下次注册直接再跑一遍即可。
 
@@ -351,7 +366,7 @@ chrome.storage.local.remove([
 
 `inbox` 与 `state.json` 都会保留，已经导入过的文件不会被重复导入。
 
-## 11. 已知限制
+## 12. 已知限制
 
 - **扩展 ID 不稳定**：未打包扩展的 ID 与路径绑定，换机器要重跑 `install.js` 传新 ID。固定 ID 需要在 manifest 加 `"key"`，但那会换掉当前 ID、现有密码库数据不会迁移。
 - **5 分钟粒度**：Chrome alarm 的最小间隔，导出后最多延迟 5 分钟。
@@ -360,30 +375,30 @@ chrome.storage.local.remove([
 - **只处理 TOTP 字段**：登录密码、备注等非 TOTP 内容不会导入。
 - **合并语义**：不提供“整体替换”。若要镜像式覆盖，需要额外开发 `clearFirst` 选项（当前固定为合并 + 去重）。
 
-## 12. 开发者参考
+## 13. 开发者参考
 
 ### 协议
 
 stdio，消息 = 4 字节小端长度前缀 + UTF-8 JSON。请求带自增 `id`，响应原样带回。
 
-| 请求 | 响应 |
-| --- | --- |
-| `{"id":1,"type":"ping"}` | `{ok:true, dir}` |
-| `{"id":2,"type":"status"}` | `{ok:true, dir, dirExists, maxBytes, pending: {name,size,mtime,digest} \| null}` |
-| `{"id":3,"type":"read","name","offset","length"}` | `{ok:true, name, offset, total, length, eof, data(base64)}` |
-| `{"id":4,"type":"ack","name","digest"}` | `{ok:true, name, deleted, imported[]}` |
+| 请求                                              | 响应                                                                             |
+| ------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `{"id":1,"type":"ping"}`                          | `{ok:true, dir}`                                                                 |
+| `{"id":2,"type":"status"}`                        | `{ok:true, dir, dirExists, maxBytes, pending: {name,size,mtime,digest} \| null}` |
+| `{"id":3,"type":"read","name","offset","length"}` | `{ok:true, name, offset, total, length, eof, data(base64)}`                      |
+| `{"id":4,"type":"ack","name","digest"}`           | `{ok:true, name, deleted, imported[]}`                                           |
 
 错误统一 `{ok:false, error:"invalidName" \| "backupNotFound" \| "invalidDigest" \| "configInvalid" \| "unknownRequest"}`。
 
 ### 文件
 
-| 路径 | 作用 |
-| --- | --- |
-| `native-host/host.js` | 本机助手，实现上面的协议 |
-| `native-host/install.js` | 注册/卸载的底层实现，被 `manage.sh` 调用 |
-| `native-host/manage.sh` | 统一入口（bash）：`status` / `install` / `uninstall` / `config` / `test`，支持 `-h/--help` |
-| `native-host/test-host.js` | 协议自测 |
-| `src/models/local-import.ts` | 扩展侧：连接助手、分块拉取、调用导入、ack、失败冷却 |
-| `src/models/import-api.ts` | 导入执行器（解析 → 解密 → 去重 → 写库），要求密码库已解锁 |
-| `src/background.ts` | alarm、解锁补跑、内部动作 `runLocalImport` / `setLocalImport` |
-| `src/components/Popup/SetPasswordPage.vue` | 设置页开关与状态 |
+| 路径                                       | 作用                                                                                       |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `native-host/host.js`                      | 本机助手，实现上面的协议                                                                   |
+| `native-host/install.js`                   | 注册/卸载的底层实现，被 `manage.sh` 调用                                                   |
+| `native-host/manage.sh`                    | 统一入口（bash）：`status` / `install` / `uninstall` / `config` / `test`，支持 `-h/--help` |
+| `native-host/test-host.js`                 | 协议自测                                                                                   |
+| `src/models/local-import.ts`               | 扩展侧：连接助手、分块拉取、调用导入、ack、失败冷却                                        |
+| `src/models/import-api.ts`                 | 导入执行器（解析 → 解密 → 去重 → 写库），要求密码库已解锁                                  |
+| `src/background.ts`                        | alarm、解锁补跑、内部动作 `runLocalImport` / `setLocalImport`                              |
+| `src/components/Popup/SetPasswordPage.vue` | 设置页开关与状态                                                                           |

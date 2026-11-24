@@ -1,4 +1,5 @@
-import * as CryptoJS from "crypto-js";
+import AES from "crypto-js/aes";
+import Utf8 from "crypto-js/enc-utf8";
 import { throwIfImportCancelled } from "./import-cancellation";
 import { argonHash, argonVerify } from "./password";
 import { createRecordMap } from "./record-map";
@@ -20,6 +21,7 @@ export async function decryptBackupData(
     throwIfImportCancelled(signal);
     const unknownStorageItem = backupData[hash];
     if (
+      !unknownStorageItem ||
       typeof unknownStorageItem !== "object" ||
       unknownStorageItem.dataType === "Key" ||
       unknownStorageItem.dataType === "Group" ||
@@ -29,11 +31,10 @@ export async function decryptBackupData(
     }
     let storageItem: RawOTPStorage;
     if (unknownStorageItem.dataType === "EncOTPStorage") {
-      if (!passphrase) {
-        continue;
-      }
-
       if (!keys.has(unknownStorageItem.keyId)) {
+        if (!passphrase) {
+          continue;
+        }
         keys.set(
           unknownStorageItem.keyId,
           await findAndUnlockKey(
@@ -51,9 +52,7 @@ export async function decryptBackupData(
 
       try {
         const decrypted = JSON.parse(
-          CryptoJS.AES.decrypt(unknownStorageItem.data, decryptKey).toString(
-            CryptoJS.enc.Utf8
-          )
+          AES.decrypt(unknownStorageItem.data, decryptKey).toString(Utf8)
         );
         storageItem = {
           ...decrypted,
@@ -81,10 +80,10 @@ export async function decryptBackupData(
     }
     if (storageItem.encrypted && passphrase) {
       try {
-        storageItem.secret = CryptoJS.AES.decrypt(
+        storageItem.secret = AES.decrypt(
           storageItem.secret,
           passphrase
-        ).toString(CryptoJS.enc.Utf8);
+        ).toString(Utf8);
         storageItem.encrypted = false;
       } catch (error) {
         continue;
@@ -114,17 +113,20 @@ export async function decryptBackupGroups(
     }
 
     if (record.dataType === "Group") {
-      if (record.id && record.name.trim()) {
+      if (record.id && typeof record.name === "string" && record.name.trim()) {
         groups[record.id] = { ...record, name: record.name.trim() };
       }
       continue;
     }
 
-    if (record.dataType !== "EncGroup" || !passphrase) {
+    if (record.dataType !== "EncGroup") {
       continue;
     }
 
     if (!keys.has(record.keyId)) {
+      if (!passphrase) {
+        continue;
+      }
       keys.set(
         record.keyId,
         await findAndUnlockKey(backupData, record.keyId, passphrase, signal)
@@ -137,9 +139,7 @@ export async function decryptBackupGroups(
 
     try {
       const decrypted = JSON.parse(
-        CryptoJS.AES.decrypt(record.data, decryptKey).toString(
-          CryptoJS.enc.Utf8
-        )
+        AES.decrypt(record.data, decryptKey).toString(Utf8)
       ) as GroupStorageRecord;
       if (
         decrypted.dataType === "Group" &&
@@ -199,7 +199,12 @@ async function findAndUnlockKey(
   }
 
   const key = importData[keyId];
-  if (key.dataType !== "Key" || key.id !== keyId) {
+  if (
+    !key ||
+    typeof key !== "object" ||
+    key.dataType !== "Key" ||
+    key.id !== keyId
+  ) {
     return null;
   }
 

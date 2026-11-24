@@ -1,4 +1,4 @@
-import * as CryptoJS from "crypto-js";
+import AES from "crypto-js/aes";
 import { Encryption } from "./encryption";
 import { throwIfImportCancelled } from "./import-cancellation";
 import { MAX_BACKUP_CONTENT_BYTES } from "./import-limits";
@@ -148,22 +148,25 @@ export async function parseBackupContent(content: string) {
 export async function decryptParsedBackup(
   backup: ParsedBackup,
   passphrase: string | null,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  preUnlockedKeys?: Map<string, string>
 ): Promise<DecryptedBackup> {
   throwIfImportCancelled(signal);
-  if (backup.requiresPassphrase && !passphrase) {
+  const usingPreUnlockedKeysOnly =
+    !passphrase && Boolean(preUnlockedKeys && preUnlockedKeys.size > 0);
+  if (backup.requiresPassphrase && !passphrase && !usingPreUnlockedKeysOnly) {
     throw new Error("passphraseRequired");
   }
 
   const unlockKey =
     backup.legacyKey && passphrase
-      ? CryptoJS.AES.decrypt(backup.legacyKey.enc, passphrase).toString()
+      ? AES.decrypt(backup.legacyKey.enc, passphrase).toString()
       : passphrase;
   if (backup.legacyKey && passphrase && !unlockKey) {
     throw new Error("incorrectPassphrase");
   }
 
-  const unlockedKeys = new Map<string, string | null>();
+  const unlockedKeys = new Map<string, string | null>(preUnlockedKeys || []);
   const entries = await decryptBackupData(
     backup.records,
     unlockKey,
@@ -182,7 +185,28 @@ export async function decryptParsedBackup(
     (record) =>
       record?.dataType === "EncOTPStorage" || record?.dataType === "EncGroup"
   );
-  if (
+  if (usingPreUnlockedKeysOnly) {
+    const decryptedEncryptedEntries = Object.keys(backup.records).filter(
+      (hash) =>
+        backup.records[hash]?.dataType === "EncOTPStorage" &&
+        Boolean(entries[hash])
+    );
+    const hasUnmatchedEncryptedV3 =
+      encryptedKeyRecords.some(
+        (record) =>
+          record &&
+          "keyId" in record &&
+          typeof record.keyId === "string" &&
+          !unlockedKeys.get(record.keyId)
+      ) ||
+      (Object.values(backup.records).some(
+        (record) => record?.dataType === "EncOTPStorage"
+      ) &&
+        decryptedEncryptedEntries.length === 0);
+    if (hasUnmatchedEncryptedV3) {
+      throw new Error("biometricBackupKeyMismatch");
+    }
+  } else if (
     encryptedKeyRecords.length &&
     unlockedKeys.size > 0 &&
     !Array.from(unlockedKeys.values()).some(Boolean)
@@ -203,7 +227,11 @@ export async function decryptParsedBackup(
     legacyEncryptedHashes.length &&
     !legacyEncryptedHashes.some((hash) => Boolean(entries[hash]))
   ) {
-    throw new Error("incorrectPassphrase");
+    throw new Error(
+      usingPreUnlockedKeysOnly
+        ? "biometricBackupKeyMismatch"
+        : "incorrectPassphrase"
+    );
   }
 
   return {
@@ -221,6 +249,9 @@ export async function applyDecryptedBackup(
   options: ApplyDecryptedBackupOptions
 ): Promise<AppliedBackupResult> {
   throwIfImportCancelled(options.signal);
+  const activeEncryption = await EntryStorage.assertEncryptionReadyForVault(
+    options.encryption
+  );
   const entries = Object.keys(backup.entries).reduce(
     (result: { [hash: string]: RawOTPStorage }, hash) => {
       result[hash] = { ...backup.entries[hash] };
@@ -256,7 +287,7 @@ export async function applyDecryptedBackup(
     options.onProgress?.(74, "ui_progress_replacing_data");
     throwIfImportCancelled(options.signal);
     storageResult = await EntryStorage.replaceImport(
-      options.encryption,
+      activeEncryption,
       entries,
       backup.groups
     );
@@ -273,7 +304,7 @@ export async function applyDecryptedBackup(
     options.onProgress?.(76, "ui_progress_merging_data");
     throwIfImportCancelled(options.signal);
     storageResult = await EntryStorage.mergeImport(
-      options.encryption,
+      activeEncryption,
       entries,
       backup.groups
     );

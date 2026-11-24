@@ -42,7 +42,7 @@
             type="button"
             class="subpage-button"
             :disabled="webdav.isLoadingList || isManagingWebDAVFiles"
-            @click="refreshWebDAVList"
+            @click="refreshWebDAVList(false)"
           >
             {{
               webdav.isLoadingList
@@ -94,9 +94,9 @@
               webdav.selectedFiles.includes(file.name) ? 'true' : 'false'
             "
             @click="toggleWebDAVFile(file)"
-            @keydown.enter.prevent="toggleWebDAVFile(file)"
-            @keydown.space.prevent="toggleWebDAVFile(file)"
-            @keydown.delete.stop.prevent="deleteSingleWebDAVFile(file)"
+            @keydown.enter.self.prevent="toggleWebDAVFile(file)"
+            @keydown.space.self.prevent="toggleWebDAVFile(file)"
+            @keydown.delete.self.stop.prevent="deleteSingleWebDAVFile(file)"
           >
             <label class="webdav-file-select" @click.stop>
               <input
@@ -237,7 +237,7 @@ export default Vue.extend({
       await this.refreshWebDAVList(true);
     },
     async refreshWebDAVList(silent = false) {
-      if (!(await this.ensureWebDAVReady())) {
+      if (!(await this.ensureWebDAVReady(!silent))) {
         return;
       }
       this.webdav.isLoadingList = true;
@@ -393,31 +393,48 @@ export default Vue.extend({
         this.webdav.config.password
       );
     },
-    async ensureWebDAVReady() {
+    async ensureWebDAVReady(interactive = true) {
       if (!this.validateWebDAVFields()) {
-        this.notify(this.i18n.webdav_settings_missing);
+        if (interactive) {
+          this.notify(this.i18n.webdav_settings_missing);
+        }
         return false;
       }
-      const granted = await this.ensureWebDAVPermission();
+      const granted = await this.ensureWebDAVPermission(interactive);
       if (!granted) {
         return false;
       }
       return true;
     },
-    ensureWebDAVPermission(): Promise<boolean> {
+    ensureWebDAVPermission(interactive = true): Promise<boolean> {
       return new Promise((resolve) => {
         const origin = getWebDAVOrigin(this.webdav.config.url);
         if (!origin) {
-          this.notify(this.i18n.webdav_invalid_url);
+          if (interactive) {
+            this.notify(this.i18n.webdav_invalid_url);
+          }
           resolve(false);
           return;
         }
-        chrome.permissions.request({ origins: [origin] }, (granted) => {
-          if (!granted) {
-            this.notify(this.i18n.webdav_permission_denied);
-          }
-          resolve(Boolean(granted));
-        });
+        if (!interactive) {
+          chrome.permissions.contains({ origins: [origin] }, (contained) => {
+            void chrome.runtime.lastError;
+            resolve(Boolean(contained));
+          });
+          return;
+        }
+        try {
+          chrome.permissions.request({ origins: [origin] }, (granted) => {
+            const ok = !chrome.runtime.lastError && Boolean(granted);
+            if (!ok) {
+              this.notify(this.i18n.webdav_permission_denied);
+            }
+            resolve(ok);
+          });
+        } catch {
+          this.notify(this.i18n.webdav_permission_denied);
+          resolve(false);
+        }
       });
     },
     formatWebDAVFileMeta(file: WebDAVFile) {
@@ -443,11 +460,14 @@ export default Vue.extend({
       return message ? message.trim().replace(/[.。]+$/g, "") : message;
     },
     formatBytes(bytes: number) {
-      if (!bytes) {
+      if (!Number.isFinite(bytes) || bytes <= 0) {
         return "0 B";
       }
       const sizes = ["B", "KB", "MB", "GB"];
-      const i = Math.floor(Math.log(bytes) / Math.log(1024));
+      const i = Math.min(
+        sizes.length - 1,
+        Math.floor(Math.log(bytes) / Math.log(1024))
+      );
       const value = bytes / Math.pow(1024, i);
       return `${value.toFixed(1)} ${sizes[i]}`;
     },

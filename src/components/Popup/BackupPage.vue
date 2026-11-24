@@ -235,25 +235,32 @@ export default Vue.extend({
       localImportStatus: null as LocalImportStatus | null,
       cloudBackingUp: false,
       cloudLastBackupAt: 0,
+      isDestroyed: false,
     };
   },
   async created() {
+    // Register synchronously so beforeDestroy always removes the exact listener.
+    chrome.runtime.onMessage.addListener(this.onRuntimeMessage);
     const [enabled, status] = await Promise.all([
       isLocalImportEnabled().catch(() => false),
       getLocalImportStatus().catch(() => null),
     ]);
+    if (this.isDestroyed) {
+      return;
+    }
     this.localImportEnabled = enabled;
     this.localImportStatus = status;
-    this.cloudLastBackupAt = backupDayToMs(
-      UserSettings.items.webdavLastBackupTime
-    );
+    // Prefer the millisecond stamp when the automatic backup wrote one; the
+    // day ordinal is the fallback after a manual backup.
+    this.cloudLastBackupAt =
+      Number(UserSettings.items.webdavLastAutoBackupAt) ||
+      backupDayToMs(UserSettings.items.webdavLastBackupTime);
     if (enabled) {
       await this.applyIntervalFromStatus();
     }
-    // A scheduled import can finish while this page is open.
-    chrome.runtime.onMessage.addListener(this.onRuntimeMessage);
   },
   beforeDestroy() {
+    this.isDestroyed = true;
     chrome.runtime.onMessage.removeListener(this.onRuntimeMessage);
   },
   computed: {
@@ -372,6 +379,14 @@ export default Vue.extend({
           this.$emit("navigate", "WebDAVPage");
           return;
         }
+        if (result === "needsPassword") {
+          this.$store.commit(
+            "notification/alert",
+            this.i18n.backup_set_password_alert ||
+              this.i18n.ui_create_password_first
+          );
+          return;
+        }
         if (result === "denied") {
           this.$store.commit(
             "notification/alert",
@@ -380,9 +395,9 @@ export default Vue.extend({
           return;
         }
         if (result === "ok") {
-          this.cloudLastBackupAt = backupDayToMs(
-            UserSettings.items.webdavLastBackupTime
-          );
+          this.cloudLastBackupAt =
+            Number(UserSettings.items.webdavLastAutoBackupAt) ||
+            backupDayToMs(UserSettings.items.webdavLastBackupTime);
         }
         this.$store.commit(
           "notification/alert",

@@ -102,7 +102,7 @@ body {
   }
 }
 
-button,
+button:not(.password-input-toggle),
 .import_file label {
   display: inline-grid;
   width: 260px !important;
@@ -359,6 +359,39 @@ button,
   background: white;
   outline: none;
   border-radius: 10px;
+}
+
+.import_passphrase .password-input,
+.import_file_passphrase .password-input {
+  width: 250px;
+  margin: 15px auto 20px;
+
+  input {
+    width: 100%;
+    margin: 0;
+    box-sizing: border-box;
+    padding-right: 36px;
+  }
+
+  &.has-biometric input {
+    padding-right: 62px;
+  }
+}
+
+.import-actions-stack .password-input {
+  width: 100%;
+  margin: 10px 0 0;
+
+  input {
+    width: 100%;
+    margin: 0;
+    box-sizing: border-box;
+    padding-right: 36px;
+  }
+
+  &.has-biometric input {
+    padding-right: 62px;
+  }
 }
 
 .import_file_passphrase {

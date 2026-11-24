@@ -270,6 +270,61 @@ export async function readWebDAVResponseText(
   }
 }
 
+export function encodeBasicAuth(username: string, password: string): string {
+  const bytes = new TextEncoder().encode(`${username}:${password}`);
+  let binary = "";
+  for (let index = 0; index < bytes.length; index++) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  return btoa(binary);
+}
+
+export function isAuthenticatorBackupFileName(fileName: string): boolean {
+  const baseName = fileName.split("/").pop() || "";
+  return /^authenticator-.+\.json$/i.test(baseName);
+}
+
+export function extractWebDAVRelativePath(
+  rawHref: string,
+  baseUrl: string
+): string {
+  let pathname = rawHref.trim();
+  if (!pathname) {
+    return "";
+  }
+  try {
+    pathname = new URL(pathname, baseUrl).pathname;
+  } catch {
+    // Keep raw path when server sends a non-URL relative string.
+  }
+  let decoded = pathname;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    // Preserve undecodable percent sequences rather than aborting listing.
+  }
+  let basePath = "/";
+  try {
+    const rawBasePath = new URL(baseUrl).pathname;
+    try {
+      basePath = decodeURIComponent(rawBasePath);
+    } catch {
+      basePath = rawBasePath;
+    }
+  } catch {
+    basePath = "/";
+  }
+  const normalizedBase = basePath.replace(/\/+$/, "");
+  let filePath = decoded;
+  if (
+    normalizedBase &&
+    (filePath === normalizedBase || filePath.startsWith(`${normalizedBase}/`))
+  ) {
+    filePath = filePath.substring(normalizedBase.length);
+  }
+  return filePath.replace(/^\/+/, "");
+}
+
 async function sendWebDAVRequest(
   method: string,
   url: string,
@@ -279,7 +334,7 @@ async function sendWebDAVRequest(
   additionalHeaders?: Record<string, string>,
   options: WebDAVRequestOptions = {}
 ): Promise<WebDAVResponse> {
-  const credentials = btoa(`${username}:${password}`);
+  const credentials = encodeBasicAuth(username, password);
   const headers: Record<string, string> = {
     Authorization: `Basic ${credentials}`,
     ...additionalHeaders,
@@ -320,6 +375,7 @@ export async function getWebDAVConfig(): Promise<WebDAVConfig> {
 }
 
 export async function saveWebDAVConfig(config: WebDAVConfig) {
+  await UserSettings.updateItems();
   UserSettings.items.webdavUrl = config.url;
   UserSettings.items.webdavUsername = config.username;
   UserSettings.items.webdavPassword = config.password;
@@ -328,6 +384,7 @@ export async function saveWebDAVConfig(config: WebDAVConfig) {
 }
 
 export async function clearWebDAVConfig() {
+  await UserSettings.updateItems();
   delete UserSettings.items.webdavUrl;
   delete UserSettings.items.webdavUsername;
   delete UserSettings.items.webdavPassword;
@@ -384,6 +441,9 @@ export async function uploadWebDAVBackup(
   const config = await getWebDAVConfig();
   if (!config.url || !config.username || !config.password) {
     throw new Error("Missing WebDAV configuration.");
+  }
+  if (encryptedBackup && !encryption.getEncryptionStatus()) {
+    throw new Error("encryptionRequired");
   }
 
   const exportData = await EntryStorage.backupGetExport(
@@ -493,16 +553,34 @@ type WebDAVMultistatusEntry = {
 };
 
 function decodeXmlEntities(value: string): string {
-  return value
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) =>
-      String.fromCodePoint(parseInt(hex, 16))
-    )
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+  const named: Record<string, string> = {
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    amp: "&",
+  };
+  return value.replace(
+    /&(#x[0-9a-f]+|#\d+|lt|gt|quot|apos|amp);/gi,
+    (match, entity: string) => {
+      if (entity[0] === "#") {
+        const isHex = entity[1] === "x" || entity[1] === "X";
+        const codePoint = parseInt(
+          entity.slice(isHex ? 2 : 1),
+          isHex ? 16 : 10
+        );
+        if (
+          Number.isFinite(codePoint) &&
+          codePoint >= 0 &&
+          codePoint <= 0x10ffff
+        ) {
+          return String.fromCodePoint(codePoint);
+        }
+        return match;
+      }
+      return named[entity.toLowerCase()] ?? match;
+    }
+  );
 }
 
 function multistatusTagText(block: string, tag: string): string | undefined {
@@ -519,19 +597,40 @@ function multistatusTagText(block: string, tag: string): string | undefined {
   return text || undefined;
 }
 
+function isOkPropstatStatus(statusText?: string): boolean {
+  return !statusText || /\b200\b/.test(statusText);
+}
+
 /** Fallback used in the service worker, where DOMParser does not exist. */
 function parseMultistatusFallback(xml: string): WebDAVMultistatusEntry[] {
   const blocks =
     xml.match(/<([\w.-]+:)?response\b[\s\S]*?<\/\1?response>/gi) || [];
-  return blocks.map((block) => ({
-    href: multistatusTagText(block, "href") || "",
-    displayName: multistatusTagText(block, "displayname"),
-    size: multistatusTagText(block, "getcontentlength"),
-    lastModified: multistatusTagText(block, "getlastmodified"),
-  }));
+  return blocks.map((block) => {
+    const propstats =
+      block.match(/<([\w.-]+:)?propstat\b[\s\S]*?<\/\1?propstat>/gi) || [];
+    const okPropstats = propstats.filter((ps) =>
+      isOkPropstatStatus(multistatusTagText(ps, "status"))
+    );
+    const searchBlocks = okPropstats.length ? okPropstats : [block];
+    const findTag = (tag: string): string | undefined => {
+      for (const candidate of searchBlocks) {
+        const value = multistatusTagText(candidate, tag);
+        if (value !== undefined) {
+          return value;
+        }
+      }
+      return undefined;
+    };
+    return {
+      href: multistatusTagText(block, "href") || "",
+      displayName: findTag("displayname"),
+      size: findTag("getcontentlength"),
+      lastModified: findTag("getlastmodified"),
+    };
+  });
 }
 
-function parseMultistatus(xml: string): WebDAVMultistatusEntry[] {
+export function parseMultistatus(xml: string): WebDAVMultistatusEntry[] {
   const Parser = (globalThis as { DOMParser?: typeof DOMParser }).DOMParser;
   if (typeof Parser !== "function") {
     return parseMultistatusFallback(xml);
@@ -540,14 +639,30 @@ function parseMultistatus(xml: string): WebDAVMultistatusEntry[] {
   return Array.from(doc.getElementsByTagNameNS("*", "response")).map((node) => {
     const text = (element?: Element | null) =>
       element?.textContent?.trim() || undefined;
-    const prop = node.getElementsByTagNameNS("*", "prop")[0] || null;
+    const propstats = Array.from(node.getElementsByTagNameNS("*", "propstat"));
+    const okProps = propstats
+      .filter((ps) =>
+        isOkPropstatStatus(text(ps.getElementsByTagNameNS("*", "status")[0]))
+      )
+      .map((ps) => ps.getElementsByTagNameNS("*", "prop")[0])
+      .filter((prop): prop is Element => Boolean(prop));
+    const props = okProps.length
+      ? okProps
+      : Array.from(node.getElementsByTagNameNS("*", "prop"));
+    const findPropText = (tag: string): string | undefined => {
+      for (const prop of props) {
+        const value = text(prop.getElementsByTagNameNS("*", tag)[0]);
+        if (value !== undefined) {
+          return value;
+        }
+      }
+      return undefined;
+    };
     return {
       href: text(node.getElementsByTagNameNS("*", "href")[0]) || "",
-      displayName: text(prop?.getElementsByTagNameNS("*", "displayname")[0]),
-      size: text(prop?.getElementsByTagNameNS("*", "getcontentlength")[0]),
-      lastModified: text(
-        prop?.getElementsByTagNameNS("*", "getlastmodified")[0]
-      ),
+      displayName: findPropText("displayname"),
+      size: findPropText("getcontentlength"),
+      lastModified: findPropText("getlastmodified"),
     };
   });
 }
@@ -586,19 +701,13 @@ export async function listWebDAVBackups(): Promise<WebDAVFile[]> {
     throw new Error(response.statusText || "Failed to fetch file list.");
   }
 
-  const basePath = new URL(baseUrl).pathname.replace(/\/$/, "") || "/";
   const files: WebDAVFile[] = [];
 
   parseMultistatus(response.responseText).forEach((entry) => {
     if (!entry.href) {
       return;
     }
-    const href = decodeURIComponent(entry.href);
-    let filePath = href;
-    if (filePath.startsWith(basePath)) {
-      filePath = filePath.substring(basePath.length);
-    }
-    filePath = filePath.replace(/^\/+/, "");
+    const filePath = extractWebDAVRelativePath(entry.href, baseUrl);
 
     if (!filePath || filePath.endsWith("/")) {
       return;
@@ -698,7 +807,10 @@ export async function pruneWebDAVBackups(
     console.error("Failed to list WebDAV backups for retention cleanup", error);
     return 0;
   }
-  const filesToDelete = getWebDAVBackupsToPrune(files, normalizedLimit);
+  const managedFiles = files.filter((file) =>
+    isAuthenticatorBackupFileName(file.name)
+  );
+  const filesToDelete = getWebDAVBackupsToPrune(managedFiles, normalizedLimit);
   let deletedCount = 0;
 
   for (const file of filesToDelete) {

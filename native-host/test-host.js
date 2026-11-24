@@ -284,6 +284,26 @@ async function main() {
   assert.strictEqual(traversal.ok, false, "path traversal must be rejected");
   assert.strictEqual(traversal.error, "invalidName");
 
+  // Replacing a file mid-import before ack must NOT delete it or skip it on the next tick.
+  const replaceName = "replace-mid-import.json";
+  const replacePath = path.join(inbox, replaceName);
+  fs.writeFileSync(replacePath, JSON.stringify({ items: [{ name: "v1" }] }));
+  const v1Status = await call({ type: "status" });
+  assert.strictEqual(v1Status.pending.name, replaceName);
+  fs.writeFileSync(replacePath, JSON.stringify({ items: [{ name: "v2" }] }));
+  const v1Ack = await call({
+    type: "ack",
+    name: replaceName,
+    digest: v1Status.pending.digest,
+  });
+  assert.strictEqual(v1Ack.deleted, false, "replaced file must not be deleted");
+  assert.strictEqual(fs.existsSync(replacePath), true);
+  const v2Status = await call({ type: "status" });
+  assert.strictEqual(v2Status.pending.name, replaceName, "replaced file must remain pending");
+  assert.notStrictEqual(v2Status.pending.digest, v1Status.pending.digest);
+  await call({ type: "ack", name: replaceName, digest: v2Status.pending.digest });
+  assert.strictEqual(fs.existsSync(replacePath), false);
+
   const unknown = await call({ type: "nope" });
   assert.strictEqual(unknown.ok, false, "unknown request must fail");
   assert.strictEqual(unknown.error, "unknownRequest");
