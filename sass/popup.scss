@@ -129,6 +129,15 @@ svg {
       fill: currentColor;
     }
 
+    // One-click backup in progress: keep the icon recognisable but moving.
+    &#i-cloud-sync.syncing {
+      opacity: 0.75;
+
+      svg {
+        animation: cloud-sync-spin 0.9s linear infinite;
+      }
+    }
+
     &:hover {
       @include themify($themes) {
         color: themed("black-1");
@@ -196,6 +205,71 @@ svg {
     @include themify($themes) {
       background: themed("grey-3");
     }
+  }
+}
+
+// Quick WebDAV actions: their own slim strip under the controls card, so they
+// stay on the first screen without crowding the entry counter.
+.vault-cloud-bar {
+  margin: 0 2px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vault-cloud-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1px;
+  @include themify($themes) {
+    color: themed("grey-1");
+  }
+}
+
+.vault-cloud-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vault-cloud-btn {
+  height: 24px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 600;
+  @include themify($themes) {
+    color: themed("grey-1");
+    fill: themed("grey-1");
+  }
+
+  svg {
+    width: 12px;
+    height: 12px;
+    fill: currentColor;
+  }
+
+  .vault-cloud-text {
+    line-height: 1;
+  }
+
+  &:hover:not(:disabled) {
+    @include themify($themes) {
+      color: themed("black-1");
+      background: themed("grey-3");
+    }
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 }
 

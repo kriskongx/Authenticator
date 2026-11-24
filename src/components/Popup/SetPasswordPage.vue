@@ -183,15 +183,66 @@
         </form>
       </details>
     </section>
+
+    <section class="subpage-section" v-if="isChromium">
+      <div class="subpage-card">
+        <label class="subpage-row">
+          <span class="subpage-row-icon neutral"><IconCode /></span>
+          <span class="subpage-row-copy">
+            <span class="subpage-row-title">{{ i18n.ui_api_title }}</span>
+            <span class="subpage-row-desc">{{ i18n.ui_api_desc }}</span>
+          </span>
+          <span class="subpage-switch">
+            <input
+              type="checkbox"
+              v-model="apiEnabled"
+              :aria-label="i18n.ui_api_title"
+              @change="syncApiAccess($event)"
+            />
+            <span class="subpage-switch-track"></span>
+          </span>
+        </label>
+        <div class="security-inline-body" v-if="apiEnabled">
+          <span class="subpage-field-label">{{ i18n.ui_api_token_label }}</span>
+          <div class="security-api-row">
+            <input
+              ref="apiToken"
+              class="subpage-text-input"
+              type="text"
+              readonly
+              :value="apiToken"
+              :title="i18n.ui_api_token_copy_hint"
+              @focus="selectApiToken"
+              @click="selectApiToken"
+            />
+            <button
+              type="button"
+              class="subpage-button danger"
+              @click="resetToken"
+            >
+              {{ i18n.ui_api_token_reset }}
+            </button>
+          </div>
+          <div class="subpage-field-help">{{ i18n.ui_api_token_hint }}</div>
+        </div>
+      </div>
+    </section>
   </div>
 </template>
 <script lang="ts">
 import Vue from "vue";
 import { verifyPasswordUsingKeyID } from "../../models/password";
 import IconArrowLeft from "../../../svg/arrow-left.svg";
+import IconCode from "../../../svg/code.svg";
 import IconKey from "../../../svg/key-solid.svg";
 import IconLock from "../../../svg/lock.svg";
 import { isChromium } from "../../browser";
+import {
+  createApiToken,
+  getApiToken,
+  isApiAccessEnabled,
+  setApiAccessEnabled,
+} from "../../models/api-access";
 import {
   cancelBiometricBundleSetup,
   createBiometricUnlockBundle,
@@ -205,6 +256,7 @@ import { openBiometricWindow } from "../../models/biometric-window";
 export default Vue.extend({
   components: {
     IconArrowLeft,
+    IconCode,
     IconKey,
     IconLock,
   },
@@ -217,19 +269,21 @@ export default Vue.extend({
       biometricAvailable: false,
       biometricBusy: false,
       biometricError: "",
+      apiEnabled: false,
+      apiToken: "",
     };
   },
   async created() {
-    try {
-      const [enabled, available] = await Promise.all([
-        isBiometricUnlockEnabled(),
-        isPlatformAuthenticatorAvailable(),
-      ]);
-      this.biometricEnabled = enabled;
-      this.biometricAvailable = available;
-    } catch {
-      this.biometricAvailable = false;
-    }
+    const [enabled, available, apiEnabled, apiToken] = await Promise.all([
+      isBiometricUnlockEnabled().catch(() => false),
+      isPlatformAuthenticatorAvailable().catch(() => false),
+      isApiAccessEnabled().catch(() => false),
+      getApiToken().catch(() => ""),
+    ]);
+    this.biometricEnabled = enabled;
+    this.biometricAvailable = available;
+    this.apiEnabled = apiEnabled;
+    this.apiToken = apiToken;
   },
   computed: {
     enforcePassword: function () {
@@ -278,6 +332,34 @@ export default Vue.extend({
     },
   },
   methods: {
+    async syncApiAccess(event: Event) {
+      // Read the state from the event: `v-model` and this handler share the
+      // same change event, so relying on the data property would be racy.
+      const enabled = (event.target as HTMLInputElement).checked;
+      this.apiEnabled = enabled;
+      if (!enabled) {
+        await setApiAccessEnabled(false);
+        return;
+      }
+      if (!this.apiToken) {
+        this.apiToken = await createApiToken();
+      }
+      await setApiAccessEnabled(true);
+      await this.$nextTick();
+      this.selectApiToken();
+    },
+    async resetToken() {
+      // Rotate only: the API stays enabled, the old token simply stops working.
+      this.apiToken = await createApiToken();
+      await this.$nextTick();
+      this.selectApiToken();
+    },
+    selectApiToken() {
+      const input = (this.$refs.apiToken as unknown) as
+        | HTMLInputElement
+        | undefined;
+      input?.select();
+    },
     async removePassphrase() {
       this.$store.commit("currentView/changeView", "LoadingPage");
 

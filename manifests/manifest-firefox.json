@@ -47,7 +47,8 @@
         "storage",
         "identity",
         "alarms",
-        "scripting"
+        "scripting",
+        "nativeMessaging"
     ],
     "optional_permissions": [
         "clipboardWrite"

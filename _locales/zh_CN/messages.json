@@ -370,7 +370,7 @@
     "description": "Toggle label for automatic WebDAV backups"
   },
   "webdav_auto_backup_desc": {
-    "message": "每 7 天在打开扩展时自动上传一份备份到 WebDAV。",
+    "message": "开启后在后台到点自动上传，不依赖是否打开弹窗。",
     "description": "Description for automatic WebDAV backups"
   },
   "webdav_connection_success": {
@@ -1908,5 +1908,201 @@
   "backup_set_password_alert": {
     "message": "请先在「设置 → 安全」中设置主密码，才能创建加密备份。",
     "description": "Prompt before encrypted backup."
+  },
+  "ui_api_title": {
+    "message": "外部 API 访问",
+    "description": "External API settings row title."
+  },
+  "ui_api_desc": {
+    "message": "允许其它扩展调用导入接口，仅在密码库解锁时可用。",
+    "description": "External API settings row description."
+  },
+  "ui_api_token_label": {
+    "message": "访问令牌",
+    "description": "External API token label."
+  },
+  "ui_api_token_hint": {
+    "message": "调用时需在消息中附带该令牌；重置后旧令牌立即失效，需要重新配置调用方。",
+    "description": "External API hint."
+  },
+  "ui_api_token_reset": {
+    "message": "重置令牌",
+    "description": "External API reset button."
+  },
+  "ui_api_token_copy_hint": {
+    "message": "点击可全选",
+    "description": "External API token input hint."
+  },
+  "ui_local_import_title": {
+    "message": "本地自动导入",
+    "description": "Local auto-import settings row title."
+  },
+  "ui_local_import_row_title": {
+    "message": "监听本机文件夹",
+    "description": "Local auto-import switch row title."
+  },
+  "ui_local_import_desc": {
+    "message": "自动导入本机文件夹中最新的 Vaultwarden 导出文件，导入成功后删除源文件。",
+    "description": "Local auto-import settings row description."
+  },
+  "ui_local_import_run": {
+    "message": "立即导入",
+    "description": "Local auto-import manual trigger."
+  },
+  "ui_local_import_disabled": {
+    "message": "未启用",
+    "description": "Local auto-import status."
+  },
+  "ui_local_import_host_missing": {
+    "message": "未检测到本机助手，请先运行 native-host/install.js。",
+    "description": "Local auto-import status."
+  },
+  "ui_local_import_pending": {
+    "message": "待导入",
+    "description": "Local auto-import status."
+  },
+  "ui_local_import_waiting": {
+    "message": "已连接，暂无新文件。",
+    "description": "Local auto-import status."
+  },
+  "ui_local_import_none": {
+    "message": "没有新的导出文件。",
+    "description": "Local auto-import result."
+  },
+  "ui_local_import_done": {
+    "message": "导入完成。",
+    "description": "Local auto-import result."
+  },
+  "ui_local_import_failed": {
+    "message": "导入失败",
+    "description": "Local auto-import result."
+  },
+  "ui_local_import_locked": {
+    "message": "密码库已锁定，解锁后会自动补导。",
+    "description": "Local auto-import result."
+  },
+  "ui_local_import_busy": {
+    "message": "正在导入，请稍候。",
+    "description": "Local auto-import result."
+  },
+  "ui_local_import_dir": {
+    "message": "监听目录",
+    "description": "Local auto-import detail label."
+  },
+  "ui_local_import_rule": {
+    "message": "文件规则",
+    "description": "Local auto-import detail label."
+  },
+  "ui_local_import_limit": {
+    "message": "大小上限",
+    "description": "Local auto-import detail label."
+  },
+  "ui_local_import_interval": {
+    "message": "检查间隔",
+    "description": "Local auto-import detail label."
+  },
+  "ui_local_import_minutes": {
+    "message": "分钟",
+    "description": "Local auto-import interval unit."
+  },
+  "ui_local_import_last": {
+    "message": "上次导入",
+    "description": "Local auto-import detail label."
+  },
+  "ui_local_import_never": {
+    "message": "还没有导入过",
+    "description": "Local auto-import last-import placeholder."
+  },
+  "ui_local_import_unknown_time": {
+    "message": "时间未知",
+    "description": "Local auto-import last-import placeholder."
+  },
+  "ui_local_import_files": {
+    "message": "个文件",
+    "description": "Local auto-import file counter unit."
+  },
+  "ui_local_import_delete_on": {
+    "message": "导入后删除",
+    "description": "Local auto-import policy."
+  },
+  "ui_local_import_keep_on": {
+    "message": "保留文件",
+    "description": "Local auto-import policy."
+  },
+  "ui_cloud_sync_title": {
+    "message": "云同步",
+    "description": "Header button and page title."
+  },
+  "ui_cloud_sync_backing_up": {
+    "message": "正在备份…",
+    "description": "Upload in progress."
+  },
+  "ui_cloud_sync_configure": {
+    "message": "去配置 WebDAV",
+    "description": "Open WebDAV settings."
+  },
+  "ui_cloud_sync_never": {
+    "message": "还没有上传过备份",
+    "description": "No backup uploaded yet."
+  },
+  "ui_cloud_sync_last_backup": {
+    "message": "上次备份",
+    "description": "Last backup label."
+  },
+  "ui_cloud_sync_restore_desc": {
+    "message": "选择一个备份覆盖当前数据",
+    "description": "Restore list description."
+  },
+  "ui_cloud_sync_restore_confirm": {
+    "message": "用这份备份覆盖当前数据？此操作不可撤销。",
+    "description": "Restore confirmation."
+  },
+  "ui_cloud_sync_grant": {
+    "message": "允许访问 WebDAV",
+    "description": "Grant the WebDAV host permission from the sync page."
+  },
+  "ui_cloud_sync_restoring": {
+    "message": "正在恢复，请稍候…",
+    "description": "Restore in progress on the cloud sync page."
+  },
+  "ui_cloud_backup_title": {
+    "message": "WebDAV 备份",
+    "description": "Left cloud icon: back up now."
+  },
+  "ui_cloud_backup_hint": {
+    "message": "点击立即备份到 WebDAV",
+    "description": "Left cloud icon tooltip."
+  },
+  "ui_cloud_restore_title": {
+    "message": "WebDAV 备份恢复",
+    "description": "Right cloud icon: restore list."
+  },
+  "ui_cloud_restore_hint": {
+    "message": "打开 WebDAV 备份列表并恢复",
+    "description": "Right cloud icon tooltip."
+  },
+  "webdav_backup_interval": {
+    "message": "备份间隔",
+    "description": "Automatic WebDAV backup interval label."
+  },
+  "webdav_backup_interval_desc": {
+    "message": "距上次备份超过该天数后自动上传一份（1–365）",
+    "description": "Interval description."
+  },
+  "ui_days_unit": {
+    "message": "天",
+    "description": "Days unit."
+  },
+  "webdav_backup_hour": {
+    "message": "执行时间",
+    "description": "Hour of day for the automatic backup."
+  },
+  "webdav_backup_hour_desc": {
+    "message": "到期后到点才上传；选「到期后立即」则一到期就传。",
+    "description": "Hour window description."
+  },
+  "webdav_backup_hour_now": {
+    "message": "到期后立即",
+    "description": "Upload as soon as the interval is due."
   }
 }

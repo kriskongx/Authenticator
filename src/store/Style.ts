@@ -9,6 +9,8 @@ export class Style implements Module {
           slideout: false, // menu
           backupSlidein: false, // full-page backup navigation
           backupSlideout: false, // full-page backup navigation
+          backupSubPage: "BackupPage", // which backup page to open
+          cloudRestoreOpen: false, // WebDAV restore picker dialog
           fadein: false, // info
           fadeout: false, // info
           show: false, // info
@@ -31,7 +33,14 @@ export class Style implements Module {
             state.style.slideout = false;
           }, 200);
         },
-        showBackupPanel(state: StyleState) {
+        openCloudRestore(state: StyleState) {
+          state.style.cloudRestoreOpen = true;
+        },
+        closeCloudRestore(state: StyleState) {
+          state.style.cloudRestoreOpen = false;
+        },
+        showBackupPanel(state: StyleState, page?: string) {
+          state.style.backupSubPage = page || "BackupPage";
           state.style.backupSlidein = true;
           state.style.backupSlideout = false;
         },

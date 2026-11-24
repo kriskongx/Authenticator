@@ -70,7 +70,9 @@ export default Vue.extend({
   watch: {
     active(value: boolean) {
       if (value) {
-        this.currentPage = "BackupPage";
+        // The header's cloud icon opens this panel straight on the sync page.
+        this.currentPage =
+          this.$store.state.style.style.backupSubPage || "BackupPage";
       }
     },
   },

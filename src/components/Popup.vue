@@ -41,6 +41,8 @@
       }"
     />
 
+    <CloudRestoreDialog />
+
     <PageHandler
       v-bind:class="{
         fadein: style.fadein,
@@ -82,6 +84,7 @@ import MainHeader from "./Popup/MainHeader.vue";
 import MainBody from "./Popup/MainBody.vue";
 import MenuPage from "./Popup/MenuPage.vue";
 import BackupNavigationPage from "./Popup/BackupNavigationPage.vue";
+import CloudRestoreDialog from "./Popup/CloudRestoreDialog.vue";
 import PageHandler from "./Popup/PageHandler.vue";
 import NotificationHandler from "./Popup/NotificationHandler.vue";
 
@@ -105,7 +108,24 @@ export default Vue.extend({
     };
   },
   computed,
+  created() {
+    chrome.runtime.onMessage.addListener(this.onRuntimeMessage);
+  },
+  beforeDestroy() {
+    chrome.runtime.onMessage.removeListener(this.onRuntimeMessage);
+  },
   methods: {
+    // The service worker can import a backup on behalf of an external caller
+    // while this popup is open; refresh in place instead of asking the user to
+    // reopen it.
+    onRuntimeMessage(message: { action?: string }): boolean {
+      if (message?.action !== "entriesUpdated") {
+        return false;
+      }
+      void this.$store.dispatch("accounts/updateEntries");
+      void this.$store.dispatch("groups/refreshGroups");
+      return false;
+    },
     hideQr() {
       this.$store.commit("style/hideQr");
     },
@@ -115,6 +135,7 @@ export default Vue.extend({
     MainBody,
     MenuPage,
     BackupNavigationPage,
+    CloudRestoreDialog,
     PageHandler,
     NotificationHandler,
   },

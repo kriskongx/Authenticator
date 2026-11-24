@@ -52,6 +52,36 @@
       />
     </div>
 
+    <div class="vault-cloud-bar">
+      <span class="vault-cloud-label">{{ i18n.ui_cloud_sync_title }}</span>
+      <span class="vault-cloud-actions">
+        <button
+          type="button"
+          class="vault-cloud-btn"
+          id="i-vault-backup"
+          :title="i18n.ui_cloud_backup_hint"
+          :aria-label="i18n.ui_cloud_backup_title"
+          :disabled="cloudBackingUp"
+          @click="cloudBackup"
+        >
+          <span class="cloud-sync-spinner" v-if="cloudBackingUp"></span>
+          <IconCloudBackup v-else />
+          <span class="vault-cloud-text">{{ i18n.webdav_card_backup }}</span>
+        </button>
+        <button
+          type="button"
+          class="vault-cloud-btn"
+          id="i-vault-restore"
+          :title="i18n.ui_cloud_restore_hint"
+          :aria-label="i18n.ui_cloud_restore_title"
+          @click="cloudRestore"
+        >
+          <IconCloudRestore />
+          <span class="vault-cloud-text">{{ i18n.webdav_card_restore }}</span>
+        </button>
+      </span>
+    </div>
+
     <div
       class="empty-state-card"
       v-if="entries.length > 0 && visibleEntriesCount === 0 && initComplete"
@@ -154,6 +184,9 @@ import IconKey from "../../../svg/key-solid.svg";
 import IconCheck from "../../../svg/check.svg";
 import IconExchange from "../../../svg/exchange.svg";
 import IconXCircle from "../../../svg/x-circle.svg";
+import IconCloudBackup from "../../../svg/cloud-backup.svg";
+import IconCloudRestore from "../../../svg/cloud-sync.svg";
+import { quickWebDAVBackup } from "../../models/webdav-quick";
 
 const computed: {
   filter: () => boolean;
@@ -175,6 +208,7 @@ export default Vue.extend({
       selectedHashes: new Set() as Set<string>,
       targetGroupId: "",
       openSwipeHash: "",
+      cloudBackingUp: false,
     };
   },
   computed: {
@@ -306,6 +340,54 @@ export default Vue.extend({
     },
   },
   methods: {
+    // Quick WebDAV actions live on the first screen: one click to back up,
+    // one click to pick a backup to restore.
+    async cloudBackup() {
+      if (this.cloudBackingUp) {
+        return;
+      }
+      if (this.$store.getters["accounts/currentlyEncrypted"]) {
+        this.$store.commit(
+          "notification/alert",
+          this.i18n.phrase_incorrect_export
+        );
+        return;
+      }
+      this.cloudBackingUp = true;
+      try {
+        const result = await quickWebDAVBackup(
+          this.$store.getters["accounts/activeEncryption"]
+        );
+        if (result === "unconfigured") {
+          this.$store.commit(
+            "notification/alert",
+            this.i18n.webdav_settings_missing
+          );
+          this.$store.commit("style/showBackupPanel", "WebDAVPage");
+          return;
+        }
+        if (result === "denied") {
+          this.$store.commit(
+            "notification/alert",
+            this.i18n.webdav_permission_denied
+          );
+          return;
+        }
+        this.$store.commit(
+          "notification/alert",
+          result === "ok"
+            ? this.i18n.webdav_backup_success
+            : result === "timeout"
+            ? this.i18n.ui_error_webdav_timeout
+            : this.i18n.webdav_backup_failure
+        );
+      } finally {
+        this.cloudBackingUp = false;
+      }
+    },
+    cloudRestore() {
+      this.$store.commit("style/openCloudRestore");
+    },
     openLink(url: string) {
       window.open(url, "_blank");
       return;
@@ -464,6 +546,8 @@ export default Vue.extend({
     IconCheck,
     IconExchange,
     IconXCircle,
+    IconCloudBackup,
+    IconCloudRestore,
   },
 });
 </script>

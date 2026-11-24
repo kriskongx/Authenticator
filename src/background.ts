@@ -12,11 +12,37 @@ import { CodeState } from "./models/otp";
 import { getOTPAuthPerLineFromOPTAuthMigration } from "./models/migration";
 import { parseOtpAuthUri } from "./models/otpauth-uri";
 import { isChrome, isFirefox } from "./browser";
-import { UserSettings } from "./models/settings";
+import {
+  DEFAULT_AUTOLOCK_MINUTES,
+  UserSettings,
+  normalizeAutolock,
+} from "./models/settings";
 import {
   BiometricCredentialEnrollment,
   finishBiometricCredentialEnrollment,
 } from "./models/biometric-unlock";
+import { isApiAccessEnabled, verifyApiToken } from "./models/api-access";
+import { importBackupContent, isVaultLocked } from "./models/import-api";
+import {
+  LOCAL_IMPORT_ALARM,
+  getLocalImportInterval,
+  importFromLocalHost,
+  isLocalImportEnabled,
+  setLocalImportEnabled,
+  setLocalImportInterval,
+} from "./models/local-import";
+import {
+  getClientDay,
+  getWebDAVConfig,
+  getWebDAVOrigin,
+  isWebDAVBackupDue,
+  normalizeBackupDay,
+  normalizeBackupIntervalDays,
+  normalizeBackupHour,
+  isBackupHourReached,
+  pruneWebDAVBackups,
+  uploadWebDAVBackup,
+} from "./models/webdav";
 
 type ContentTab = Pick<chrome.tabs.Tab, "id" | "windowId">;
 
@@ -37,6 +63,10 @@ type RuntimeMessage =
     }
   | { action: "dropbox" | "drive" | "onedrive" }
   | { action: "lock" | "resetAutolock" | "updateContextMenu" }
+  | { action: "runLocalImport" }
+  | { action: "setLocalImport"; enabled: boolean }
+  | { action: "setLocalImportInterval"; minutes: number }
+  | { action: "runWebDAVBackup" | "syncWebDAVAlarm" }
   | { action: "updateContentTab"; data: ContentTab };
 
 type WebDAVRequestMessage = {
@@ -162,7 +192,14 @@ function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     case "lock":
     case "resetAutolock":
     case "updateContextMenu":
+    case "runLocalImport":
+    case "runWebDAVBackup":
+    case "syncWebDAVAlarm":
       return true;
+    case "setLocalImport":
+      return "enabled" in value && typeof value.enabled === "boolean";
+    case "setLocalImportInterval":
+      return "minutes" in value && typeof value.minutes === "number";
     case "updateContentTab":
       return (
         "data" in value &&
@@ -257,6 +294,33 @@ async function handleRuntimeMessage(
     });
     await chrome.alarms.clear("autolock");
     await setAutolock();
+    // A scheduled import cannot run while the vault is locked, so the unlock is
+    // the moment to catch up.
+    void runLocalImportTick().catch((error) =>
+      console.info("[background] local import after unlock skipped", error)
+    );
+    void runWebDAVAutoBackup().catch((error) =>
+      console.info("[background] WebDAV backup after unlock skipped", error)
+    );
+  } else if (message.action === "runLocalImport") {
+    await runLocalImportTick({ manual: true });
+  } else if (message.action === "setLocalImport") {
+    await setLocalImportEnabled(message.enabled);
+    await syncLocalImportAlarm();
+    if (message.enabled) {
+      // Do not make the user wait for the first alarm tick.
+      void runLocalImportTick().catch((error) =>
+        console.info("[background] local import after enable skipped", error)
+      );
+    }
+  } else if (message.action === "setLocalImportInterval") {
+    await setLocalImportInterval(message.minutes);
+    await syncLocalImportAlarm();
+  } else if (message.action === "runWebDAVBackup") {
+    await runWebDAVAutoBackup();
+    await syncWebDAVBackupAlarm();
+  } else if (message.action === "syncWebDAVAlarm") {
+    await syncWebDAVBackupAlarm();
   } else if (["dropbox", "drive", "onedrive"].includes(message.action)) {
     getBackupToken(message.action);
   } else if (message.action === "finishBiometricEnrollment") {
@@ -315,7 +379,208 @@ function sendRuntimeMessage(message: unknown) {
   });
 }
 
-chrome.alarms.onAlarm.addListener(() => {
+let localImportInFlight = false;
+async function syncLocalImportAlarm(): Promise<void> {
+  if (await isLocalImportEnabled()) {
+    chrome.alarms.create(LOCAL_IMPORT_ALARM, {
+      periodInMinutes: await getLocalImportInterval(),
+    });
+    return;
+  }
+  await chrome.alarms.clear(LOCAL_IMPORT_ALARM);
+}
+
+const WEBDAV_BACKUP_ALARM = "webdavBackup";
+// Alarms wake the worker hourly; the 7-day check decides whether to upload.
+const WEBDAV_BACKUP_PERIOD_MINUTES = 60;
+let webdavBackupInFlight = false;
+
+/** WebDAV auto-backup is only possible when configured, permitted and enabled. */
+async function readWebDAVAutoBackupConfig() {
+  await UserSettings.updateItems();
+  if (UserSettings.items.webdavAutoBackup === false) {
+    return null;
+  }
+  const config = await getWebDAVConfig();
+  if (!config.url || !config.username || !config.password) {
+    return null;
+  }
+  const origin = getWebDAVOrigin(config.url);
+  if (!origin) {
+    return null;
+  }
+  const granted = await new Promise<boolean>((resolve) => {
+    chrome.permissions.contains({ origins: [origin] }, (result) =>
+      resolve(Boolean(result))
+    );
+  });
+  return granted ? config : null;
+}
+
+/** Minutes until the next local occurrence of `hour`:00. */
+function minutesUntilHour(hour: number, now = new Date()): number {
+  const target = new Date(now);
+  target.setHours(hour, 0, 0, 0);
+  if (target.getTime() <= now.getTime()) {
+    target.setDate(target.getDate() + 1);
+  }
+  return Math.max(1, Math.round((target.getTime() - now.getTime()) / 60000));
+}
+
+async function syncWebDAVBackupAlarm(): Promise<void> {
+  const config = await readWebDAVAutoBackupConfig().catch(() => null);
+  if (!config) {
+    await chrome.alarms.clear(WEBDAV_BACKUP_ALARM);
+    return;
+  }
+  const targetHour = normalizeBackupHour(UserSettings.items.webdavBackupHour);
+  const existing = await chrome.alarms.get(WEBDAV_BACKUP_ALARM);
+
+  if (targetHour < 0) {
+    // No preferred hour: hourly ticks are enough, keep the existing phase.
+    if (!existing) {
+      chrome.alarms.create(WEBDAV_BACKUP_ALARM, {
+        delayInMinutes: 1,
+        periodInMinutes: WEBDAV_BACKUP_PERIOD_MINUTES,
+      });
+    }
+    return;
+  }
+
+  // Anchor the ticks to the chosen hour so the upload lands at HH:00 instead of
+  // at whatever minute the worker happened to start.
+  await chrome.alarms.clear(WEBDAV_BACKUP_ALARM);
+  chrome.alarms.create(WEBDAV_BACKUP_ALARM, {
+    delayInMinutes: minutesUntilHour(targetHour),
+    periodInMinutes: WEBDAV_BACKUP_PERIOD_MINUTES,
+  });
+}
+
+/**
+ * Uploads a WebDAV backup when the schedule is due. Runs from an alarm, so it no
+ * longer depends on the popup being opened — but it still needs the vault to be
+ * unlocked, because the backup is encrypted with the session passphrase.
+ */
+async function runWebDAVAutoBackup(): Promise<void> {
+  if (webdavBackupInFlight) {
+    return;
+  }
+  const config = await readWebDAVAutoBackupConfig().catch(() => null);
+  if (!config) {
+    return;
+  }
+  const lastDay = normalizeBackupDay(UserSettings.items.webdavLastBackupTime);
+  const intervalDays = normalizeBackupIntervalDays(
+    UserSettings.items.webdavBackupIntervalDays
+  );
+  if (!isWebDAVBackupDue(getClientDay(), lastDay, intervalDays)) {
+    return;
+  }
+  const targetHour = normalizeBackupHour(UserSettings.items.webdavBackupHour);
+  if (!isBackupHourReached(targetHour)) {
+    return;
+  }
+  const { cachedPassphrase, cachedKeyId } = await chrome.storage.session.get();
+  if (!cachedPassphrase) {
+    return;
+  }
+
+  webdavBackupInFlight = true;
+  try {
+    const encryption = new Encryption(cachedPassphrase, cachedKeyId);
+    const ok = await uploadWebDAVBackup(encryption, config.encrypted !== false);
+    if (!ok) {
+      return;
+    }
+    UserSettings.items.webdavLastBackupTime = getClientDay();
+    await UserSettings.commitItems();
+    await pruneWebDAVBackups(Number(UserSettings.items.webdavMaxBackups || 0));
+  } catch (error) {
+    console.error("[background] WebDAV auto backup failed", error);
+  } finally {
+    webdavBackupInFlight = false;
+  }
+}
+
+/**
+ * Imports whatever the native host has staged. A locked vault is not an error:
+ * the tick simply returns and the unlock path retries.
+ */
+async function runLocalImportTick(
+  options: { manual?: boolean } = {}
+): Promise<void> {
+  const manual = options.manual === true;
+  if (!(await isLocalImportEnabled())) {
+    if (manual) {
+      throw new Error("localImportDisabled");
+    }
+    return;
+  }
+  if (await isVaultLocked()) {
+    if (manual) {
+      throw new Error("vaultLocked");
+    }
+    return;
+  }
+  if (localImportInFlight) {
+    if (manual) {
+      throw new Error("importInProgress");
+    }
+    return;
+  }
+
+  localImportInFlight = true;
+  try {
+    // Only the newest export is imported; the host marks older queued files as
+    // superseded on ack, so a backlog never merges stale entries back in.
+    const result = await importFromLocalHost({ ignoreCooldown: manual });
+    if (!result) {
+      if (manual) {
+        throw new Error("localImportNoPending");
+      }
+      return;
+    }
+    notifyEntriesUpdated();
+  } finally {
+    localImportInFlight = false;
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  void syncLocalImportAlarm();
+  void syncWebDAVBackupAlarm();
+});
+chrome.runtime.onStartup.addListener(() => {
+  void syncLocalImportAlarm();
+  void syncWebDAVBackupAlarm();
+});
+// Self-heal: if the flag was saved while the worker was asleep and the alarm
+// never got created, the next wake-up restores it.
+void syncLocalImportAlarm().catch((error) =>
+  console.info("[background] local import alarm sync skipped", error)
+);
+void syncWebDAVBackupAlarm().catch((error) =>
+  console.info("[background] WebDAV alarm sync skipped", error)
+);
+
+// The alarm listener used to ignore the alarm name, which meant any new alarm
+// would also lock the vault. Filter by name before touching the session.
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === WEBDAV_BACKUP_ALARM) {
+    void runWebDAVAutoBackup().catch((error) =>
+      console.info("[background] scheduled WebDAV backup skipped", error)
+    );
+    return;
+  }
+  if (alarm.name === LOCAL_IMPORT_ALARM) {
+    void runLocalImportTick().catch((error) =>
+      console.info("[background] scheduled local import skipped", error)
+    );
+    return;
+  }
+  if (alarm.name !== "autolock") {
+    return;
+  }
   void chrome.storage.session
     .set({
       cachedPassphrase: null,
@@ -711,13 +976,13 @@ async function setAutolock() {
 
   // Set default autolock value
   if (UserSettings.items.autolock === undefined) {
-    UserSettings.items.autolock = 30;
+    UserSettings.items.autolock = DEFAULT_AUTOLOCK_MINUTES;
   }
 
-  if (Number(UserSettings.items.autolock) > 0) {
-    chrome.alarms.create("autolock", {
-      delayInMinutes: Number(UserSettings.items.autolock),
-    });
+  // 0 means "never auto-lock": no alarm at all, matching what the UI shows.
+  const minutes = normalizeAutolock(UserSettings.items.autolock);
+  if (minutes > 0) {
+    chrome.alarms.create("autolock", { delayInMinutes: minutes });
   }
 }
 
@@ -818,3 +1083,107 @@ type WebDAVResponse = {
   headers: string;
   responseText: string;
 };
+
+// External API entry point. Only other extensions can reach this listener:
+// `externally_connectable` is not declared, so web pages are never allowed in.
+// Every call beyond `ping` needs the token generated in the security settings.
+let externalImportInFlight = false;
+
+chrome.runtime.onMessageExternal.addListener(
+  (rawMessage, sender, sendResponse) => {
+    void handleExternalMessage(rawMessage, sender).then(
+      (response) => sendResponse(response),
+      (error: unknown) => {
+        sendResponse({
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    );
+    return true;
+  }
+);
+
+async function handleExternalMessage(
+  rawMessage: unknown,
+  sender: chrome.runtime.MessageSender
+): Promise<Record<string, unknown>> {
+  if (!isObject(rawMessage) || typeof rawMessage.action !== "string") {
+    throw new Error("externalMessageInvalid");
+  }
+
+  if (rawMessage.action === "ping") {
+    const authorized = await verifyApiToken(rawMessage.token);
+    return {
+      ok: true,
+      name: "Authenticator",
+      version: chrome.runtime.getManifest().version,
+      apiEnabled: await isApiAccessEnabled(),
+      locked: authorized ? await isVaultLocked() : null,
+    };
+  }
+
+  if (rawMessage.action !== "importBackup") {
+    throw new Error("externalActionUnsupported");
+  }
+
+  if (!isExternalExtensionCaller(sender)) {
+    throw new Error("externalCallerRejected");
+  }
+  if (!(await isApiAccessEnabled())) {
+    throw new Error("externalApiDisabled");
+  }
+  if (!(await verifyApiToken(rawMessage.token))) {
+    throw new Error("externalTokenInvalid");
+  }
+  if (externalImportInFlight) {
+    throw new Error("importInProgress");
+  }
+
+  const content =
+    typeof rawMessage.content === "string" ? rawMessage.content : "";
+  const passphrase =
+    typeof rawMessage.passphrase === "string" ? rawMessage.passphrase : null;
+  const clearFirst = rawMessage.clearFirst === true;
+
+  externalImportInFlight = true;
+  try {
+    const result = await importBackupContent({
+      content,
+      passphrase,
+      clearFirst,
+    });
+    notifyEntriesUpdated();
+    return { ok: true, result };
+  } finally {
+    externalImportInFlight = false;
+  }
+}
+
+function isExternalExtensionCaller(
+  sender: chrome.runtime.MessageSender
+): boolean {
+  if (!sender.id || sender.id === chrome.runtime.id) {
+    return false;
+  }
+  const origin =
+    (sender as chrome.runtime.MessageSender & { origin?: string }).origin || "";
+  if (origin === `chrome-extension://${sender.id}`) {
+    return true;
+  }
+  return (
+    typeof sender.url === "string" &&
+    sender.url.startsWith(`chrome-extension://${sender.id}/`)
+  );
+}
+
+function notifyEntriesUpdated() {
+  try {
+    chrome.runtime.sendMessage({ action: "entriesUpdated" }, () => {
+      // No listener is fine: the popup may be closed.
+      void chrome.runtime.lastError;
+    });
+  } catch (error) {
+    console.info("[background] entriesUpdated broadcast skipped", error);
+  }
+}

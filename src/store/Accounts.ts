@@ -71,6 +71,22 @@ export class Accounts implements Module {
         matchedEntries: (state: AccountsState) => {
           return getMatchedEntriesHash(state.siteName, state.entries);
         },
+        /**
+         * Encryption for the active master key. Never null: callers that only
+         * need "an object to hand to export" get an empty one when locked.
+         */
+        activeEncryption(state: AccountsState): Encryption {
+          const keyId = state.defaultEncryption;
+          if (!keyId) {
+            return new Encryption("", "");
+          }
+          // The map stores the interface type; every implementation is an
+          // Encryption instance (see accounts/updateEncryption).
+          return (
+            ((state.encryption.get(keyId) as unknown) as Encryption) ||
+            new Encryption("", "")
+          );
+        },
         currentlyEncrypted(state: AccountsState) {
           for (const entry of state.entries) {
             if (entry.secret === null) {
@@ -711,6 +727,16 @@ export class Accounts implements Module {
             newStorageLocation === StorageLocation.Sync
           ) {
             const localData = await chrome.storage.local.get();
+            // Device-only state (API token, auto-import switch, biometric
+            // record) must not travel through sync and must survive the local
+            // wipe below.
+            const deviceData: Record<string, unknown> = {};
+            for (const key of Object.keys(localData)) {
+              if (key.startsWith("Authenticator")) {
+                deviceData[key] = localData[key];
+                delete localData[key];
+              }
+            }
             if (localData?.UserSettings) {
               delete localData.UserSettings;
               await chrome.storage.sync.set(localData);
@@ -725,6 +751,9 @@ export class Accounts implements Module {
             ) {
               UserSettings.items.storageLocation = StorageLocation.Sync;
               await chrome.storage.local.clear();
+              if (Object.keys(deviceData).length) {
+                await chrome.storage.local.set(deviceData);
+              }
               await UserSettings.commitItems();
               return "updateSuccess";
             } else {

@@ -38,12 +38,70 @@ type WebDAVRequestOptions = WebDAVTransferOptions & {
 export const WEBDAV_CONTROL_TIMEOUT_MS = 15000;
 export const WEBDAV_TRANSFER_TIMEOUT_MS = 5 * 60 * 1000;
 
+export const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Day ordinal for the backup schedule, aligned to the **local** calendar day
+ * (UTC midnight would put the boundary at 08:00 in UTC+8).
+ */
+export function getClientDay(now = Date.now()): number {
+  const date = new Date(now);
+  return Math.floor(
+    (date.getTime() - date.getTimezoneOffset() * 60000) / DAY_MS
+  );
+}
+
+/** Coerces a stored `webdavLastBackupTime` into a day ordinal (>= 0). */
+export function normalizeBackupDay(value: unknown): number {
+  const day = Math.floor(Number(value));
+  return Number.isFinite(day) && day > 0 ? day : 0;
+}
+
+export function backupDayToMs(value: unknown): number {
+  const day = normalizeBackupDay(value);
+  if (day <= 0) {
+    return 0;
+  }
+  return day * DAY_MS + new Date().getTimezoneOffset() * 60000;
+}
+
+/**
+ * Hour of day (0-23) the upload may start; -1 means "as soon as it is due".
+ */
+export function normalizeBackupHour(value: unknown): number {
+  const hour = Math.floor(Number(value));
+  if (!Number.isFinite(hour) || hour < 0) {
+    return -1;
+  }
+  return Math.min(hour, 23);
+}
+
+/** True once the local clock has reached the configured hour. */
+export function isBackupHourReached(
+  targetHour: number,
+  now = new Date()
+): boolean {
+  return targetHour < 0 || now.getHours() >= targetHour;
+}
+
+export const DEFAULT_BACKUP_INTERVAL_DAYS = 7;
+
+/** Clamp a user supplied interval; 0 / garbage falls back to the default. */
+export function normalizeBackupIntervalDays(value: unknown): number {
+  const days = Math.floor(Number(value));
+  if (!Number.isFinite(days) || days < 1) {
+    return DEFAULT_BACKUP_INTERVAL_DAYS;
+  }
+  return Math.min(days, 365);
+}
+
 export function isWebDAVBackupDue(
   currentDay: number,
   lastBackupDay: number,
-  intervalDays = 7
+  intervalDays = DEFAULT_BACKUP_INTERVAL_DAYS
 ) {
-  const delta = currentDay - lastBackupDay;
+  const delta =
+    normalizeBackupDay(currentDay) - normalizeBackupDay(lastBackupDay);
   return delta < 0 || delta >= intervalDays;
 }
 
@@ -414,15 +472,83 @@ function waitForWebDAVRetry(ms: number, signal?: AbortSignal) {
       reject(new Error("cancelled"));
       return;
     }
-    const timeoutId = window.setTimeout(() => {
+    // `window` does not exist in the MV3 service worker; the bare timers do.
+    const timeoutId = setTimeout(() => {
       signal?.removeEventListener("abort", handleAbort);
       resolve();
     }, ms);
     const handleAbort = () => {
-      window.clearTimeout(timeoutId);
+      clearTimeout(timeoutId);
       reject(new Error("cancelled"));
     };
     signal?.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
+type WebDAVMultistatusEntry = {
+  href: string;
+  displayName?: string;
+  size?: string;
+  lastModified?: string;
+};
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) =>
+      String.fromCodePoint(parseInt(hex, 16))
+    )
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function multistatusTagText(block: string, tag: string): string | undefined {
+  // WebDAV responses use prefixes (`<d:href>`), so the prefix is optional.
+  const pattern = new RegExp(
+    `<(?:[\\w.-]+:)?${tag}\\b[^>]*>([\\s\\S]*?)</(?:[\\w.-]+:)?${tag}>`,
+    "i"
+  );
+  const match = pattern.exec(block);
+  if (!match) {
+    return undefined;
+  }
+  const text = decodeXmlEntities(match[1].replace(/<[^>]*>/g, "")).trim();
+  return text || undefined;
+}
+
+/** Fallback used in the service worker, where DOMParser does not exist. */
+function parseMultistatusFallback(xml: string): WebDAVMultistatusEntry[] {
+  const blocks =
+    xml.match(/<([\w.-]+:)?response\b[\s\S]*?<\/\1?response>/gi) || [];
+  return blocks.map((block) => ({
+    href: multistatusTagText(block, "href") || "",
+    displayName: multistatusTagText(block, "displayname"),
+    size: multistatusTagText(block, "getcontentlength"),
+    lastModified: multistatusTagText(block, "getlastmodified"),
+  }));
+}
+
+function parseMultistatus(xml: string): WebDAVMultistatusEntry[] {
+  const Parser = (globalThis as { DOMParser?: typeof DOMParser }).DOMParser;
+  if (typeof Parser !== "function") {
+    return parseMultistatusFallback(xml);
+  }
+  const doc = new Parser().parseFromString(xml, "text/xml");
+  return Array.from(doc.getElementsByTagNameNS("*", "response")).map((node) => {
+    const text = (element?: Element | null) =>
+      element?.textContent?.trim() || undefined;
+    const prop = node.getElementsByTagNameNS("*", "prop")[0] || null;
+    return {
+      href: text(node.getElementsByTagNameNS("*", "href")[0]) || "",
+      displayName: text(prop?.getElementsByTagNameNS("*", "displayname")[0]),
+      size: text(prop?.getElementsByTagNameNS("*", "getcontentlength")[0]),
+      lastModified: text(
+        prop?.getElementsByTagNameNS("*", "getlastmodified")[0]
+      ),
+    };
   });
 }
 
@@ -460,18 +586,14 @@ export async function listWebDAVBackups(): Promise<WebDAVFile[]> {
     throw new Error(response.statusText || "Failed to fetch file list.");
   }
 
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(response.responseText, "text/xml");
-  const nodes = Array.from(doc.getElementsByTagNameNS("*", "response"));
   const basePath = new URL(baseUrl).pathname.replace(/\/$/, "") || "/";
-
   const files: WebDAVFile[] = [];
-  nodes.forEach((node) => {
-    const hrefNode = node.getElementsByTagNameNS("*", "href")[0];
-    if (!hrefNode || !hrefNode.textContent) {
+
+  parseMultistatus(response.responseText).forEach((entry) => {
+    if (!entry.href) {
       return;
     }
-    const href = decodeURIComponent(hrefNode.textContent);
+    const href = decodeURIComponent(entry.href);
     let filePath = href;
     if (filePath.startsWith(basePath)) {
       filePath = filePath.substring(basePath.length);
@@ -482,25 +604,11 @@ export async function listWebDAVBackups(): Promise<WebDAVFile[]> {
       return;
     }
 
-    const propNode = node.getElementsByTagNameNS("*", "prop")[0];
-    const displayNameNode = propNode?.getElementsByTagNameNS(
-      "*",
-      "displayname"
-    )[0];
-    const sizeNode = propNode?.getElementsByTagNameNS(
-      "*",
-      "getcontentlength"
-    )[0];
-    const modifiedNode = propNode?.getElementsByTagNameNS(
-      "*",
-      "getlastmodified"
-    )[0];
-
     files.push({
       name: filePath,
-      displayName: displayNameNode?.textContent || filePath,
-      size: sizeNode ? Number(sizeNode.textContent) : undefined,
-      lastModified: modifiedNode?.textContent || undefined,
+      displayName: entry.displayName || filePath,
+      size: entry.size ? Number(entry.size) : undefined,
+      lastModified: entry.lastModified,
     });
   });
 

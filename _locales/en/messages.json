@@ -370,7 +370,7 @@
     "description": "Toggle label for automatic WebDAV backups"
   },
   "webdav_auto_backup_desc": {
-    "message": "Keep a copy on your WebDAV server every 7 days when Authenticator is opened.",
+    "message": "Uploads a backup in the background once the interval has passed.",
     "description": "Description for automatic WebDAV backups"
   },
   "webdav_connection_success": {
@@ -1908,5 +1908,201 @@
   "backup_set_password_alert": {
     "message": "Set a master password in Settings → Security before creating an encrypted backup.",
     "description": "Prompt before encrypted backup."
+  },
+  "ui_api_title": {
+    "message": "External API access",
+    "description": "External API settings row title."
+  },
+  "ui_api_desc": {
+    "message": "Let other extensions call the import API while the vault is unlocked.",
+    "description": "External API settings row description."
+  },
+  "ui_api_token_label": {
+    "message": "Access token",
+    "description": "External API token label."
+  },
+  "ui_api_token_hint": {
+    "message": "Every call must include this token. Resetting it invalidates the old one; update your callers afterwards.",
+    "description": "External API hint."
+  },
+  "ui_api_token_reset": {
+    "message": "Reset token",
+    "description": "External API reset button."
+  },
+  "ui_api_token_copy_hint": {
+    "message": "Click to select all",
+    "description": "External API token input hint."
+  },
+  "ui_local_import_title": {
+    "message": "Local auto-import",
+    "description": "Local auto-import settings row title."
+  },
+  "ui_local_import_row_title": {
+    "message": "Watch local folder",
+    "description": "Local auto-import switch row title."
+  },
+  "ui_local_import_desc": {
+    "message": "Import the newest Vaultwarden export from a local folder and delete the file once it is imported.",
+    "description": "Local auto-import settings row description."
+  },
+  "ui_local_import_run": {
+    "message": "Import now",
+    "description": "Local auto-import manual trigger."
+  },
+  "ui_local_import_disabled": {
+    "message": "Disabled",
+    "description": "Local auto-import status."
+  },
+  "ui_local_import_host_missing": {
+    "message": "Native helper not found. Run native-host/install.js first.",
+    "description": "Local auto-import status."
+  },
+  "ui_local_import_pending": {
+    "message": "Pending",
+    "description": "Local auto-import status."
+  },
+  "ui_local_import_waiting": {
+    "message": "Connected, no new file yet.",
+    "description": "Local auto-import status."
+  },
+  "ui_local_import_none": {
+    "message": "No new export found.",
+    "description": "Local auto-import result."
+  },
+  "ui_local_import_done": {
+    "message": "Import finished.",
+    "description": "Local auto-import result."
+  },
+  "ui_local_import_failed": {
+    "message": "Import failed",
+    "description": "Local auto-import result."
+  },
+  "ui_local_import_locked": {
+    "message": "The vault is locked. It will import after you unlock.",
+    "description": "Local auto-import result."
+  },
+  "ui_local_import_busy": {
+    "message": "An import is already running.",
+    "description": "Local auto-import result."
+  },
+  "ui_local_import_dir": {
+    "message": "Folder",
+    "description": "Local auto-import detail label."
+  },
+  "ui_local_import_rule": {
+    "message": "File rule",
+    "description": "Local auto-import detail label."
+  },
+  "ui_local_import_limit": {
+    "message": "Size limit",
+    "description": "Local auto-import detail label."
+  },
+  "ui_local_import_interval": {
+    "message": "Every",
+    "description": "Local auto-import detail label."
+  },
+  "ui_local_import_minutes": {
+    "message": "min",
+    "description": "Local auto-import interval unit."
+  },
+  "ui_local_import_last": {
+    "message": "Last import",
+    "description": "Local auto-import detail label."
+  },
+  "ui_local_import_never": {
+    "message": "Never imported",
+    "description": "Local auto-import last-import placeholder."
+  },
+  "ui_local_import_unknown_time": {
+    "message": "time unknown",
+    "description": "Local auto-import last-import placeholder."
+  },
+  "ui_local_import_files": {
+    "message": "files",
+    "description": "Local auto-import file counter unit."
+  },
+  "ui_local_import_delete_on": {
+    "message": "delete after import",
+    "description": "Local auto-import policy."
+  },
+  "ui_local_import_keep_on": {
+    "message": "keep files",
+    "description": "Local auto-import policy."
+  },
+  "ui_cloud_sync_title": {
+    "message": "Cloud sync",
+    "description": "Header button and page title."
+  },
+  "ui_cloud_sync_backing_up": {
+    "message": "Uploading…",
+    "description": "Upload in progress."
+  },
+  "ui_cloud_sync_configure": {
+    "message": "Configure WebDAV",
+    "description": "Open WebDAV settings."
+  },
+  "ui_cloud_sync_never": {
+    "message": "No backup uploaded yet",
+    "description": "No backup uploaded yet."
+  },
+  "ui_cloud_sync_last_backup": {
+    "message": "Last backup",
+    "description": "Last backup label."
+  },
+  "ui_cloud_sync_restore_desc": {
+    "message": "Pick a backup to restore",
+    "description": "Restore list description."
+  },
+  "ui_cloud_sync_restore_confirm": {
+    "message": "Restore this backup over the current data? This cannot be undone.",
+    "description": "Restore confirmation."
+  },
+  "ui_cloud_sync_grant": {
+    "message": "Allow WebDAV access",
+    "description": "Grant the WebDAV host permission from the sync page."
+  },
+  "ui_cloud_sync_restoring": {
+    "message": "Restoring, please wait…",
+    "description": "Restore in progress on the cloud sync page."
+  },
+  "ui_cloud_backup_title": {
+    "message": "WebDAV backup",
+    "description": "Left cloud icon: back up now."
+  },
+  "ui_cloud_backup_hint": {
+    "message": "Click to back up to WebDAV now",
+    "description": "Left cloud icon tooltip."
+  },
+  "ui_cloud_restore_title": {
+    "message": "Restore from WebDAV",
+    "description": "Right cloud icon: restore list."
+  },
+  "ui_cloud_restore_hint": {
+    "message": "Open the WebDAV backup list to restore",
+    "description": "Right cloud icon tooltip."
+  },
+  "webdav_backup_interval": {
+    "message": "Backup interval",
+    "description": "Automatic WebDAV backup interval label."
+  },
+  "webdav_backup_interval_desc": {
+    "message": "Upload a new backup once this many days have passed (1-365)",
+    "description": "Interval description."
+  },
+  "ui_days_unit": {
+    "message": "days",
+    "description": "Days unit."
+  },
+  "webdav_backup_hour": {
+    "message": "Run at",
+    "description": "Hour of day for the automatic backup."
+  },
+  "webdav_backup_hour_desc": {
+    "message": "Waits for this hour once due; pick “As soon as due” to upload right away.",
+    "description": "Hour window description."
+  },
+  "webdav_backup_hour_now": {
+    "message": "As soon as due",
+    "description": "Upload as soon as the interval is due."
   }
 }

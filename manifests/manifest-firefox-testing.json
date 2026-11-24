@@ -45,7 +45,8 @@
         "<all_urls>",
         "clipboardWrite",
         "storage",
-        "identity"
+        "identity",
+        "nativeMessaging"
     ],
     "optional_permissions": [
         "clipboardWrite",

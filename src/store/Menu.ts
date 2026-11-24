@@ -1,5 +1,5 @@
 import { isSafari } from "../browser";
-import { UserSettings } from "../models/settings";
+import { UserSettings, normalizeAutolock } from "../models/settings";
 import { ManagedStorage } from "../models/storage";
 
 export class Menu implements Module {
@@ -14,7 +14,7 @@ export class Menu implements Module {
         smartFilter: UserSettings.items.smartFilter === true,
         enableContextMenu: UserSettings.items.enableContextMenu === true,
         theme: UserSettings.items.theme || (isSafari ? "flat" : "normal"),
-        autolock: Number(UserSettings.items.autolock) || 30,
+        autolock: normalizeAutolock(UserSettings.items.autolock),
         backupDisabled: await ManagedStorage.get("disableBackup", false),
         exportDisabled: await ManagedStorage.get("disableExport", false),
         enforcePassword: await ManagedStorage.get("enforcePassword", false),
@@ -54,8 +54,16 @@ export class Menu implements Module {
           UserSettings.commitItems();
         },
         setAutolock(state: MenuState, autolock: number) {
-          state.autolock = autolock;
-          UserSettings.items.autolock = autolock;
+          // Ignore the transient empty value while the field is being retyped,
+          // so clearing it does not silently switch the vault to "never lock".
+          // (`Number("")` is 0, so a numeric check alone would not catch it.)
+          const raw: unknown = autolock;
+          if (raw === "" || raw === null || raw === undefined) {
+            return;
+          }
+          const minutes = normalizeAutolock(raw);
+          state.autolock = minutes;
+          UserSettings.items.autolock = minutes;
           UserSettings.commitItems();
         },
       },

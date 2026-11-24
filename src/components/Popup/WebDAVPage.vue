@@ -125,6 +125,53 @@
         </label>
 
         <label class="subpage-row">
+          <span class="subpage-row-icon neutral"><IconSync /></span>
+          <span class="subpage-row-copy">
+            <span class="subpage-row-title">{{
+              i18n.webdav_backup_interval
+            }}</span>
+            <span class="subpage-row-desc">{{
+              i18n.webdav_backup_interval_desc
+            }}</span>
+          </span>
+          <span class="subpage-control">
+            <input
+              class="subpage-number-input"
+              type="number"
+              v-model.number="webdav.intervalDays"
+              min="1"
+              max="365"
+              :aria-label="i18n.webdav_backup_interval"
+              @change="updateIntervalPreference"
+            />
+            <span class="subpage-control-unit">{{ i18n.ui_days_unit }}</span>
+          </span>
+        </label>
+
+        <label class="subpage-row">
+          <span class="subpage-row-icon neutral"><IconSync /></span>
+          <span class="subpage-row-copy">
+            <span class="subpage-row-title">{{ i18n.webdav_backup_hour }}</span>
+            <span class="subpage-row-desc">{{
+              i18n.webdav_backup_hour_desc
+            }}</span>
+          </span>
+          <span class="subpage-control">
+            <select
+              class="subpage-select webdav-hour-select"
+              v-model.number="webdav.backupHour"
+              :aria-label="i18n.webdav_backup_hour"
+              @change="updateBackupHourPreference"
+            >
+              <option :value="-1">{{ i18n.webdav_backup_hour_now }}</option>
+              <option v-for="hour in hourOptions" :key="hour" :value="hour">
+                {{ hourLabel(hour) }}
+              </option>
+            </select>
+          </span>
+        </label>
+
+        <label class="subpage-row">
           <span class="subpage-row-icon neutral"><IconDatabase /></span>
           <span class="subpage-row-copy">
             <span class="subpage-row-title">{{ i18n.ui_retention_count }}</span>
@@ -339,11 +386,7 @@ import IconDatabase from "../../../svg/database.svg";
 import IconSync from "../../../svg/sync.svg";
 import { Encryption } from "../../models/encryption";
 import { MAX_BACKUP_CONTENT_BYTES } from "../../models/import-limits";
-import {
-  applyDecryptedBackup,
-  decryptParsedBackup,
-} from "../../models/import-service";
-import { parseBackupContentOffThread } from "../../models/import-worker-client";
+import { restoreBackupContent } from "../../models/backup-restore";
 import {
   downloadWebDAVBackup,
   getWebDAVConfig,
@@ -355,6 +398,10 @@ import {
   type WebDAVConfig,
   type WebDAVFile,
   getWebDAVOrigin,
+  backupDayToMs,
+  normalizeBackupDay,
+  normalizeBackupIntervalDays,
+  normalizeBackupHour,
 } from "../../models/webdav";
 import { UserSettings } from "../../models/settings";
 
@@ -379,6 +426,8 @@ export default Vue.extend({
         autoBackup: true,
         clearBeforeRestore: false,
         maxBackups: 0,
+        intervalDays: 7,
+        backupHour: -1,
         files: [] as WebDAVFile[],
         selectedFile: "",
         isTesting: false,
@@ -423,8 +472,11 @@ export default Vue.extend({
       if (!this.webdav.lastBackupDay) {
         return this.i18n.webdav_never_backed_up || "Never backed up";
       }
-      const ms = this.webdav.lastBackupDay * 24 * 60 * 60 * 1000;
+      const ms = backupDayToMs(this.webdav.lastBackupDay);
       return new Date(ms).toLocaleDateString();
+    },
+    hourOptions(): number[] {
+      return Array.from({ length: 24 }, (_, index) => index);
     },
     restoreHint(): string {
       return this.webdav.files.length
@@ -445,8 +497,14 @@ export default Vue.extend({
       this.webdav.maxBackups = Number(
         UserSettings.items.webdavMaxBackups || 0
       );
-      this.webdav.lastBackupDay = Number(
-        UserSettings.items.webdavLastBackupTime || 0
+      this.webdav.intervalDays = normalizeBackupIntervalDays(
+        UserSettings.items.webdavBackupIntervalDays
+      );
+      this.webdav.backupHour = normalizeBackupHour(
+        UserSettings.items.webdavBackupHour
+      );
+      this.webdav.lastBackupDay = normalizeBackupDay(
+        UserSettings.items.webdavLastBackupTime
       );
       if (config.url) {
         this.refreshWebDAVList(true);
@@ -466,6 +524,8 @@ export default Vue.extend({
         await saveWebDAVConfig(this.webdavConfig);
         UserSettings.items.webdavMaxBackups = this.webdav.maxBackups;
         await UserSettings.commitItems();
+        this.syncAutoBackupAlarm();
+        this.syncAutoBackupAlarm();
         this.notify(this.i18n.updateSuccess);
       } finally {
         this.webdav.isSaving = false;
@@ -701,58 +761,26 @@ export default Vue.extend({
       signal?: AbortSignal,
       onProgress?: (value: number, label: string) => void
     ) {
-      onProgress?.(48, this.i18n.ui_progress_parsing_backup);
-      const parsedBackup = await parseBackupContentOffThread(content, {
+      const result = await restoreBackupContent({
+        content,
+        encryption,
+        clearFirst,
         signal,
-        onProgress: (value) =>
-          onProgress?.(
-            48 + value * 0.16,
-            this.i18n.ui_progress_parsing_backup
-          ),
+        requestPassphrase: () => this.promptRestorePassphrase(),
+        onProgress: (value, key) =>
+          onProgress?.(value, this.i18n[key] || key),
+        onApplyStart: () => {
+          this.webdav.restoreCanCancel = false;
+        },
+        refresh: async () => {
+          await this.$store.dispatch("groups/refreshGroups");
+          await this.$store.dispatch("accounts/updateEntries");
+        },
       });
-      const passphrase = parsedBackup.requiresPassphrase
-        ? await this.promptRestorePassphrase()
-        : null;
-      if (parsedBackup.requiresPassphrase && !passphrase) {
-        throw new Error("cancelled");
-      }
-      onProgress?.(
-        68,
-        passphrase
-          ? this.i18n.ui_progress_decrypting
-          : this.i18n.ui_progress_preparing_import
-      );
-      const decryptedBackup = await decryptParsedBackup(
-        parsedBackup,
-        passphrase,
-        signal
-      );
-      const failedCount = parsedBackup.failedCount;
-      const succeededCount = parsedBackup.succeededCount;
 
-      try {
-        this.webdav.restoreCanCancel = false;
-        await applyDecryptedBackup(decryptedBackup, {
-          encryption,
-          clearFirst,
-          onProgress: (value, key) =>
-            onProgress?.(value, this.i18n[key] || key),
-          refresh: async () => {
-            await this.$store.dispatch("groups/refreshGroups");
-            await this.$store.dispatch("accounts/updateEntries");
-          },
-          signal,
-        });
-      } catch (error) {
-        if ((error as Error).message === "noImportableEntries") {
-          throw new Error("parseError");
-        }
-        throw error;
-      }
-
-      if (failedCount > 0 && succeededCount === 0) {
+      if (result.failedCount > 0 && result.succeededCount === 0) {
         this.notify(this.i18n.migration_fail);
-      } else if (failedCount > 0) {
+      } else if (result.failedCount > 0) {
         this.notify(this.i18n.migration_partly_fail);
       }
     },
@@ -872,6 +900,41 @@ export default Vue.extend({
     updateAutoBackupPreference() {
       UserSettings.items.webdavAutoBackup = this.webdav.autoBackup;
       UserSettings.commitItems();
+      this.syncAutoBackupAlarm();
+      if (this.webdav.autoBackup) {
+        this.runAutoBackupNow();
+      }
+    },
+    runAutoBackupNow() {
+      chrome.runtime.sendMessage({ action: "runWebDAVBackup" }, () => {
+        void chrome.runtime.lastError;
+      });
+    },
+    hourLabel(hour: number): string {
+      return `${String(hour).padStart(2, "0")}:00`;
+    },
+    updateBackupHourPreference() {
+      const hour = normalizeBackupHour(this.webdav.backupHour);
+      this.webdav.backupHour = hour;
+      UserSettings.items.webdavBackupHour = hour;
+      UserSettings.commitItems();
+    },
+    updateIntervalPreference() {
+      const days = normalizeBackupIntervalDays(this.webdav.intervalDays);
+      this.webdav.intervalDays = days;
+      UserSettings.items.webdavBackupIntervalDays = days;
+      UserSettings.commitItems();
+      this.syncAutoBackupAlarm();
+      // A shorter interval may already be overdue: do not wait for the alarm.
+      this.runAutoBackupNow();
+      // A shorter interval may already be overdue: do not wait for the alarm.
+      this.runAutoBackupNow();
+    },
+    // The worker schedules the alarm; tell it whenever the config changes.
+    syncAutoBackupAlarm() {
+      chrome.runtime.sendMessage({ action: "syncWebDAVAlarm" }, () => {
+        void chrome.runtime.lastError;
+      });
     },
     updateClearBeforeRestorePreference() {
       UserSettings.items.webdavClearBeforeRestore =

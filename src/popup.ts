@@ -18,13 +18,10 @@ import { Qr } from "./store/Qr";
 import { Advisor } from "./store/Advisor";
 import { Groups } from "./store/Groups";
 import { Dropbox, Drive, OneDrive } from "./models/backup";
-import { Encryption } from "./models/encryption";
 import {
   getWebDAVConfig,
   getWebDAVOrigin,
-  isWebDAVBackupDue,
-  pruneWebDAVBackups,
-  uploadWebDAVBackup,
+  normalizeBackupDay,
 } from "./models/webdav";
 import type { WebDAVConfig } from "./models/webdav";
 import { syncTimeWithGoogle } from "./syncTime";
@@ -150,7 +147,10 @@ async function init() {
     }
     if (webdavAutoConfig) {
       window.setTimeout(() => {
-        maybeWebDAVAutoBackup(clientTime, instance, webdavAutoConfig!);
+        // The worker owns the upload so the schedule also runs without the popup.
+        chrome.runtime.sendMessage({ action: "runWebDAVBackup" }, () => {
+          void chrome.runtime.lastError;
+        });
       }, 2000);
     }
 
@@ -401,42 +401,9 @@ async function getWebDAVAutoConfig(): Promise<WebDAVAutoConfig | null> {
   }
   return {
     config,
-    lastBackupDay: Number(UserSettings.items.webdavLastBackupTime || 0),
+    lastBackupDay: normalizeBackupDay(UserSettings.items.webdavLastBackupTime),
     maxBackups: Number(UserSettings.items.webdavMaxBackups || 0),
   };
-}
-
-async function maybeWebDAVAutoBackup(
-  clientTime: number,
-  instance: Vue,
-  autoConfig: WebDAVAutoConfig
-) {
-  if (!isWebDAVBackupDue(clientTime, autoConfig.lastBackupDay)) {
-    return;
-  }
-  const defaultEncryptionId = instance.$store.state.accounts.defaultEncryption;
-  const encryption = defaultEncryptionId
-    ? instance.$store.state.accounts.encryption.get(defaultEncryptionId)
-    : new Encryption("", "");
-  if (
-    !encryption ||
-    (autoConfig.config.encrypted && !encryption.getEncryptionStatus())
-  ) {
-    return;
-  }
-  try {
-    const success = await uploadWebDAVBackup(
-      encryption,
-      autoConfig.config.encrypted
-    );
-    if (success) {
-      UserSettings.items.webdavLastBackupTime = clientTime;
-      await UserSettings.commitItems();
-      await pruneWebDAVBackups(autoConfig.maxBackups);
-    }
-  } catch (error) {
-    console.error("WebDAV auto backup failed", error);
-  }
 }
 
 function hasOriginPermission(origin: string): Promise<boolean> {

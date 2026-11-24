@@ -162,11 +162,7 @@ export default Vue.extend({
       this.$store.commit("currentView/changeView", page);
     },
     showBackup() {
-      this.$store.commit("style/showBackupPanel");
-    },
-    toggleSelect() {
-      this.$store.commit("style/toggleSelect");
-      this.$store.commit("accounts/stopFilter");
+      this.$store.commit("style/showBackupPanel", "BackupPage");
     },
     lock() {
       chrome.runtime.sendMessage({ action: "lock" }, window.close);

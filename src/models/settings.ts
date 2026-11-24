@@ -28,6 +28,8 @@ interface UserSettingsData {
   webdavLastBackupTime?: number;
   webdavClearBeforeRestore?: boolean;
   webdavMaxBackups?: number;
+  webdavBackupIntervalDays?: number;
+  webdavBackupHour?: number;
   storageLocation?: StorageLocation;
 
   // syncable settings
@@ -39,6 +41,24 @@ interface UserSettingsData {
   smartFilter?: boolean;
   theme?: string;
   zoom?: number;
+}
+
+export const DEFAULT_AUTOLOCK_MINUTES = 30;
+
+/**
+ * `0` means "never auto-lock" and must survive the round trip; a truthiness
+ * fallback (`Number(x) || 30`) would silently turn it back into 30 on reload.
+ * An empty value is "not set yet", not "never": `Number("")` is 0.
+ */
+export function normalizeAutolock(value: unknown): number {
+  if (value === "" || value === null || value === undefined) {
+    return DEFAULT_AUTOLOCK_MINUTES;
+  }
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes < 0) {
+    return DEFAULT_AUTOLOCK_MINUTES;
+  }
+  return Math.floor(minutes);
 }
 
 // Maybe we can have a better way to define this
@@ -66,14 +86,37 @@ const LocalUserSettingsDataKeys = [
   "webdavLastBackupTime",
   "webdavClearBeforeRestore",
   "webdavMaxBackups",
+  "webdavBackupIntervalDays",
+  "webdavBackupHour",
   "storageLocation",
 ];
+
+// Kept local to avoid a settings <-> webdav import cycle.
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export class UserSettings {
   static items: UserSettingsData = {};
 
   static async updateItems() {
     UserSettings.items = await UserSettings.getAllItems();
+    if (UserSettings.migrateLegacyValues(UserSettings.items)) {
+      await UserSettings.commitItems();
+    }
+  }
+
+  /**
+   * Fixes values written by older builds. Idempotent: once converted the check
+   * no longer matches, so this is a no-op on every later load.
+   */
+  private static migrateLegacyValues(items: UserSettingsData): boolean {
+    let changed = false;
+    const lastBackup = Number(items.webdavLastBackupTime);
+    if (Number.isFinite(lastBackup) && lastBackup > 1e11) {
+      // An early build stored milliseconds here; the schedule works in days.
+      items.webdavLastBackupTime = Math.floor(lastBackup / DAY_MS);
+      changed = true;
+    }
+    return changed;
   }
 
   static async convertFromLocalStorage(
@@ -211,7 +254,9 @@ type NumberOption =
   | "offset"
   | "zoom"
   | "webdavLastBackupTime"
-  | "webdavMaxBackups";
+  | "webdavMaxBackups"
+  | "webdavBackupIntervalDays"
+  | "webdavBackupHour";
 
 type JSONOption = "advisorIgnoreList";
 
@@ -241,6 +286,8 @@ function isNumberOption(key: string): key is NumberOption {
     "zoom",
     "webdavLastBackupTime",
     "webdavMaxBackups",
+    "webdavBackupIntervalDays",
+    "webdavBackupHour",
   ].includes(key);
 }
 

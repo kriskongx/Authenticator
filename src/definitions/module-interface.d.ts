@@ -48,6 +48,8 @@ interface StyleState {
     slidein: boolean;
     slideout: boolean;
     backupSlidein: boolean;
+    backupSubPage: string;
+    cloudRestoreOpen: boolean;
     backupSlideout: boolean;
     fadein: boolean;
     fadeout: boolean;
