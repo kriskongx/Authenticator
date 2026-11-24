@@ -110,12 +110,27 @@ describe("EnterPasswordPage", () => {
   describe("inline device unlock", () => {
     const mountPage = () => mount(EnterPasswordPage, { store, localVue });
 
+    // The wrapper's `vm` is typed as a bare Vue instance here, so the page's
+    // own members have to be described explicitly for the assertions below.
+    type InlineUnlockVm = {
+      unlockInline: (manual?: boolean) => Promise<void>;
+      handleUnlockFailure: (
+        error: unknown,
+        manual: boolean,
+        duration: number
+      ) => void;
+      biometricEnabled: boolean;
+      biometricError: string;
+    };
+    const vmOf = (wrapper: { vm: unknown }) =>
+      (wrapper.vm as unknown) as InlineUnlockVm;
+
     it("does nothing when device unlock is not available", async () => {
       const wrapper = mountPage();
       const performUnlock = sinon.stub().resolves();
       wrapper.setMethods({ performUnlock });
 
-      await wrapper.vm.unlockInline(true);
+      await vmOf(wrapper).unlockInline(true);
 
       performUnlock.should.not.have.been.called;
     });
@@ -133,9 +148,9 @@ describe("EnterPasswordPage", () => {
         applyBundle,
         openUnlockWindow: openWindow,
       });
-      wrapper.vm.biometricEnabled = true;
+      vmOf(wrapper).biometricEnabled = true;
 
-      await wrapper.vm.unlockInline(true);
+      await vmOf(wrapper).unlockInline(true);
 
       applyBundle.should.have.been.calledOnce;
       openWindow.should.not.have.been.called;
@@ -146,7 +161,7 @@ describe("EnterPasswordPage", () => {
       const openWindow = sinon.stub();
       wrapper.setMethods({ openUnlockWindow: openWindow });
 
-      wrapper.vm.handleUnlockFailure(
+      vmOf(wrapper).handleUnlockFailure(
         new DOMException("refused", "NotAllowedError"),
         true,
         100
@@ -160,14 +175,14 @@ describe("EnterPasswordPage", () => {
       const openWindow = sinon.stub();
       wrapper.setMethods({ openUnlockWindow: openWindow });
 
-      wrapper.vm.handleUnlockFailure(
+      vmOf(wrapper).handleUnlockFailure(
         new DOMException("cancelled", "NotAllowedError"),
         true,
         5000
       );
 
       openWindow.should.not.have.been.called;
-      wrapper.vm.biometricError.should.equal(
+      vmOf(wrapper).biometricError.should.equal(
         localVue.prototype.i18n.biometric_unlock_cancelled
       );
     });
@@ -177,10 +192,14 @@ describe("EnterPasswordPage", () => {
       const openWindow = sinon.stub();
       wrapper.setMethods({ openUnlockWindow: openWindow });
 
-      wrapper.vm.handleUnlockFailure(new Error("decrypt failed"), true, 5000);
+      vmOf(wrapper).handleUnlockFailure(
+        new Error("decrypt failed"),
+        true,
+        5000
+      );
 
       openWindow.should.not.have.been.called;
-      wrapper.vm.biometricError.should.equal(
+      vmOf(wrapper).biometricError.should.equal(
         localVue.prototype.i18n.biometric_unlock_failed
       );
     });
@@ -190,14 +209,14 @@ describe("EnterPasswordPage", () => {
       const openWindow = sinon.stub();
       wrapper.setMethods({ openUnlockWindow: openWindow });
 
-      wrapper.vm.handleUnlockFailure(
+      vmOf(wrapper).handleUnlockFailure(
         new DOMException("refused", "NotAllowedError"),
         false,
         100
       );
 
       openWindow.should.not.have.been.called;
-      wrapper.vm.biometricError.should.equal("");
+      vmOf(wrapper).biometricError.should.equal("");
     });
   });
 });
