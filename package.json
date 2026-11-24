@@ -12,7 +12,8 @@
     "format": "prettier --write \"src/**/*.{js,ts,vue}\" \"sass/**/*.scss\" \"scripts/**/*.ts\" \"_locales/{en,zh_CN}/messages.json\" \"package*.json\"",
     "format:check": "prettier --check \"src/**/*.{js,ts,vue}\" \"sass/**/*.scss\" \"scripts/**/*.ts\" \"_locales/{en,zh_CN}/messages.json\" \"package*.json\"",
     "pretest": "bash scripts/build.sh test",
-    "test": "node scripts/test-runner.js"
+    "test": "node scripts/test-runner.js",
+    "chrome:fast": "SKIP_LICENSES=1 bash scripts/build.sh chrome"
   },
   "repository": {
     "type": "git",

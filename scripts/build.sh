@@ -57,12 +57,39 @@ fi
 cp ./sass/DroidSansMono.woff2 ./sass/mocha.css ./css/
 
 AUTHENTICATOR_VERSION=$(node -p "require('./package.json').version")
-echo "Generating licenses file..."
-./node_modules/.bin/npm-license-generator \
-    --out-path ./view/licenses.html \
-    --template ./scripts/licenses-template.html \
-    --error-missing=false
-node -e "const fs = require('fs'); const file = './view/licenses.html'; const version = process.argv[1]; fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/__AUTHENTICATOR_VERSION__/g, version));" "$AUTHENTICATOR_VERSION"
+# License generation walks the whole node_modules tree and can stall (pnpm store,
+# puppeteer cache, registry lookups). Bound it, and let local builds skip it:
+#   SKIP_LICENSES=1 npm run chrome
+#   LICENSE_TIMEOUT=180 npm run chrome
+if [[ -n "${SKIP_LICENSES:-}" ]]; then
+    echo "Skipping license generation (SKIP_LICENSES=${SKIP_LICENSES})."
+else
+    LICENSE_TIMEOUT=${LICENSE_TIMEOUT:-15}
+    echo "Generating licenses file... (timeout ${LICENSE_TIMEOUT}s)"
+    ./node_modules/.bin/npm-license-generator \
+        --out-path ./view/licenses.html \
+        --template ./scripts/licenses-template.html \
+        --error-missing=false &
+    LICENSE_PID=$!
+    ( sleep "$LICENSE_TIMEOUT"
+      pkill -TERM -P "$LICENSE_PID" >/dev/null 2>&1 || true
+      kill -TERM "$LICENSE_PID" >/dev/null 2>&1 || true ) &
+    WATCHDOG_PID=$!
+    LICENSE_OK=1
+    if wait "$LICENSE_PID"; then
+        kill -TERM "$WATCHDOG_PID" >/dev/null 2>&1 || true
+    else
+        kill -TERM "$WATCHDOG_PID" >/dev/null 2>&1 || true
+        LICENSE_OK=0
+        echo "Warning: license generation failed or timed out after ${LICENSE_TIMEOUT}s."
+        echo "         Keeping the existing view/licenses.html."
+        echo "         Skip it next time with: SKIP_LICENSES=1 npm run chrome"
+    fi
+    wait "$WATCHDOG_PID" >/dev/null 2>&1 || true
+    if [[ $LICENSE_OK -eq 1 ]]; then
+        node -e "const fs = require('fs'); const file = './view/licenses.html'; const version = process.argv[1]; fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/__AUTHENTICATOR_VERSION__/g, version));" "$AUTHENTICATOR_VERSION"
+    fi
+fi
 
 postCompile () {
     mkdir $1
